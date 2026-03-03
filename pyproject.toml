@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trogdor"
+version = "0.0.1"
+description = "Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR)"
+authors = [{ name = "Adam He", email = "adamyhe@gmail.com" }]
+license = { file = "LICENSE" }
+urls = { homepage = "https://github.com/adamyhe/trogdor" }
+requires-python = ">= 3.9"
+dependencies = [
+    "torch",
+    "torcheval",
+    "pybigtools",
+    "numpy",
+    "pandas",
+    "tqdm",
+]
+
+[project.scripts]
+TROGDOR = "burninate.cli:chiaroscuro"
+trogdor = "burninate.cli:chiaroscuro"
+dREG = "burninate.cli:chiaroscuro"
+dreg = "burninate.cli:chiaroscuro"
+
+[project.optional-dependencies]
+dev = ["pytest", "wandb"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["burninate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that require real BigWig/BED files on disk (deselected by default)",
+]
