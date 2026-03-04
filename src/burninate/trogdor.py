@@ -312,6 +312,7 @@ class TROGDOR(torch.nn.Module):
         verbose=True,
         wandb_run=None,
         bf16=True,
+        scheduler=None,
     ):
         """
         Fit the model to data and validate it periodically.
@@ -338,6 +339,10 @@ class TROGDOR(torch.nn.Module):
         bf16 : bool
             Use bfloat16 mixed precision via torch.autocast. No GradScaler is
             needed. Set to False to train in float32. Default is True.
+        scheduler : torch.optim.lr_scheduler.LRScheduler or None
+            Learning rate scheduler stepped once per batch after each
+            ``optimizer.step()``. Pass any PyTorch scheduler; ``None`` keeps
+            the optimizer's LR fixed. Default is None.
         """
         iteration = 0
         early_stop_count = 0
@@ -365,6 +370,18 @@ class TROGDOR(torch.nn.Module):
 
                 loss.backward()
                 optimizer.step()
+
+                if scheduler is not None:
+                    scheduler.step()
+
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "train/bce": loss.item(),
+                            "train/lr": optimizer.param_groups[0]["lr"],
+                        },
+                        step=iteration,
+                    )
 
                 epoch_loss += loss.item()
                 epoch_batches += 1
@@ -433,7 +450,6 @@ class TROGDOR(torch.nn.Module):
                     if wandb_run is not None:
                         wandb_run.log(
                             {
-                                "train/bce": train_loss_avg,
                                 "val/bce": val_loss_,
                                 "val/auprc": val_auprc.item(),
                                 "val/dice": val_dice.item(),

@@ -69,9 +69,27 @@ val_loader = torch.utils.data.DataLoader(
     pin_memory=True,
 )
 
+MAX_EPOCHS = 20
+WARMUP_STEPS = 500
+
 # --- Model + optimizer ---
 model = TROGDOR(name="TROGDOR", pos_weight=10).cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+
+# --- LR schedule: linear warmup + cosine decay ---
+total_steps = MAX_EPOCHS * len(train_loader)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[
+        torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-8, end_factor=1.0, total_iters=WARMUP_STEPS
+        ),
+        torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=total_steps - WARMUP_STEPS, eta_min=1e-6
+        ),
+    ],
+    milestones=[WARMUP_STEPS],
+)
 
 # --- Wandb ---
 run = wandb.init(
@@ -82,8 +100,10 @@ run = wandb.init(
         "batch_size": 64,
         "lr": 1e-3,
         "weight_decay": 1e-4,
-        "max_epochs": 20,
+        "max_epochs": MAX_EPOCHS,
         "early_stopping": 5,
+        "warmup_steps": WARMUP_STEPS,
+        "total_steps": total_steps,
     },
 )
 
@@ -92,10 +112,11 @@ model.fit(
     train_loader,
     optimizer,
     val_loader,
-    max_epochs=20,
+    max_epochs=MAX_EPOCHS,
     batch_size=64,
     early_stopping=5,
     verbose=True,
     wandb_run=run,
+    scheduler=scheduler,
 )
 run.finish()

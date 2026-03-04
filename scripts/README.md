@@ -9,6 +9,7 @@ Most users do not need them — the pre-trained model is bundled with the packag
 scripts/
   data/     download_training_data.sh  — fetch K562 PRO/GRO-seq bigWigs from GEO
   train/    train.py                   — train TROGDOR on K562 data
+            lr_search.py               — grid search over learning rates (1e-6 to 1e-3)
   benchmark/                           — (planned) benchmarking utilities
 ```
 
@@ -39,7 +40,22 @@ python scripts/train/train.py
 
 Trains on G1/G2/G3/G5 with a 7:1 ratio of TSS-centered to genome-tiled
 windows per batch, validates on G6, and saves the best checkpoint by
-validation BCE. Early stopping is applied after 10 epochs without improvement.
+validation BCE. Early stopping is applied after 5 epochs without improvement.
+
+The LR schedule is linear warmup (500 steps, 1e-8 → 1e-3) followed by
+cosine annealing to near zero over the remaining steps.
+
+### LR search
+
+To find the best peak learning rate before a full training run:
+
+```bash
+python scripts/train/lr_search.py
+```
+
+Sweeps 7 log-spaced LRs from 1e-6 to 1e-3, training each for 1000 steps with
+a flat LR and evaluating val BCE and AUPRC. Results are logged to wandb under
+the `lr_search` group.
 
 ### Weights & Biases
 
@@ -50,7 +66,8 @@ pip install -e ".[dev]"
 wandb login
 ```
 
-Metrics logged per epoch: `train/bce`, `val/bce`, `val/auprc`, `val/dice`.
+Metrics logged per batch: `train/bce`, `train/lr`.
+Metrics logged per epoch: `val/bce`, `val/auprc`, `val/dice`.
 
 ### Mixed precision
 
