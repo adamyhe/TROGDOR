@@ -31,6 +31,7 @@ tss_dataset = NascentDataset(
     tss_beds=train_tss,
     transform=standardization,
     rc_prob=0.5,
+    max_jitter=2**14,
     tss_centered=True,
 )
 # Genome-wide tiled: captures true negatives
@@ -40,6 +41,7 @@ tiled_dataset = NascentDataset(
     tss_beds=train_tss,
     transform=standardization,
     rc_prob=0.5,
+    max_jitter=2**14,
 )
 
 # MixedBatchLoader: 7/8 TSS-centered + 1/8 tiled per batch
@@ -68,7 +70,7 @@ val_loader = torch.utils.data.DataLoader(
 )
 
 # --- Model + optimizer ---
-model = TROGDOR(name="TROGDOR").cuda()
+model = TROGDOR(name="TROGDOR", pos_weight=10).cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
 # --- Wandb ---
@@ -80,8 +82,8 @@ run = wandb.init(
         "batch_size": 64,
         "lr": 1e-3,
         "weight_decay": 1e-4,
-        "max_epochs": 100,
-        "early_stopping": 10,
+        "max_epochs": 20,
+        "early_stopping": 5,
     },
 )
 
@@ -90,9 +92,9 @@ model.fit(
     train_loader,
     optimizer,
     val_loader,
-    max_epochs=100,
+    max_epochs=20,
     batch_size=64,
-    early_stopping=10,
+    early_stopping=5,
     verbose=True,
     wandb_run=run,
 )

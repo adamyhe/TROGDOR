@@ -394,7 +394,14 @@ class TROGDOR(torch.nn.Module):
                     y_val = torch.cat(y_val)
                     logits_val = torch.cat(logits_val)
 
-                    val_loss = self.loss(logits_val, y_val)
+                    pos_weight = (
+                        self._pos_weight.cpu()
+                        if self._pos_weight is not None
+                        else None
+                    )
+                    val_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        logits_val, y_val, pos_weight=pos_weight, reduction="none"
+                    )
 
                     logits_flat = torch.sigmoid(logits_val.reshape(-1))
                     y_flat = y_val.reshape(-1).long()
