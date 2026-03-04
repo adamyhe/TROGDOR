@@ -179,7 +179,9 @@ class NascentDataset(torch.utils.data.Dataset):
         pl_bw = pybigtools.open(self.pl_bigwigs[dataset_idx])
         mn_bw = pybigtools.open(self.mn_bigwigs[dataset_idx])
         pl_vals = np.array(pl_bw.values(chrom, win_start, win_end), dtype=np.float32)
-        mn_vals = np.array(mn_bw.values(chrom, win_start, win_end), dtype=np.float32)
+        mn_vals = np.abs(
+            np.array(mn_bw.values(chrom, win_start, win_end), dtype=np.float32)
+        )
         pl_bw.close()
         mn_bw.close()
 
