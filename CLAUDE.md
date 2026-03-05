@@ -33,11 +33,11 @@ Short contigs shorter than `--chunk_size` (default 262144) are automatically ski
 
 ### Package layout
 
-- `src/burninate/cli.py` – CLI entry point (`chiaroscuro()` function); parses args and dispatches to subcommands
-- `src/burninate/trogdor.py` – Core model (`TROGDOR` class), `normalization()`, `standardization()` (deprecated), `load_pretrained_model()`
-- `src/burninate/dataset.py` – Dataset classes for training; not used in deployment
-- `src/burninate/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2) and `predict_chromosome()` (sliding-window chromosome scoring)
-- `src/burninate/logger.py` – Training metrics logger (copied from bpnet-lite)
+- `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
+- `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class), `normalization()`, `standardization()` (deprecated), `load_pretrained_model()`
+- `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
+- `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2) and `predict_chromosome()` (sliding-window chromosome scoring)
+- `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 
 ### Model architecture (`TROGDOR`)
 
@@ -56,7 +56,7 @@ Output: `(batch, 1, length // output_stride)` logits. Loss: BCEWithLogitsLoss. M
 
 ### Pre-trained model
 
-Bundled as `src/burninate/TROGDOR_UNET.torch` (loaded via `importlib.resources`). `load_pretrained_model()` in `trogdor.py` handles loading (`strict=False` to ignore training-only keys).
+Bundled as `src/chiaroscuro/TROGDOR_UNET.torch` (loaded via `importlib.resources`). `load_pretrained_model()` in `trogdor.py` handles loading (`strict=False` to ignore training-only keys).
 
 ### Data normalization
 

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from burninate.dataset import MixedBatchLoader, NascentDataset, NascentDataset_
+from chiaroscuro.dataset import MixedBatchLoader, NascentDataset, NascentDataset_
 
 
 # ---------------------------------------------------------------------------

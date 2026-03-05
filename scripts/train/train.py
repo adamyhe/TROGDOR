@@ -6,8 +6,8 @@ import os
 import torch
 import wandb
 
-from burninate.dataset import MixedBatchLoader, NascentDataset
-from burninate.trogdor import TROGDOR, normalization
+from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
+from chiaroscuro.trogdor import TROGDOR, normalization
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 
@@ -22,6 +22,19 @@ train_tss = [TSS_BED] * len(TRAIN_SAMPLES)
 val_pl = [os.path.join(DATA_DIR, f"{s}.pl.bw") for s in VAL_SAMPLES]
 val_mn = [os.path.join(DATA_DIR, f"{s}.mn.bw") for s in VAL_SAMPLES]
 val_tss = [TSS_BED] * len(VAL_SAMPLES)
+
+# --- Hyperparameters ---
+MAX_EPOCHS = 25
+WARMUP_STEPS = 500
+BATCH_SIZE = 64
+EARLY_STOPPING = 5
+LEARNING_RATE = 1e-3
+WEIGHT_DECAY = 1e-4
+FOCAL_ALPHA = 0.999
+FOCAL_GAMMA = 2.0
+TVERSKY_ALPHA = 0.3
+TVERSKY_BETA = 0.7
+TVERSKY_LAMBDA = 1.0
 
 # --- Training datasets ---
 # TSS-centered: one window per annotated TSS (focused positives)
@@ -48,7 +61,7 @@ tiled_dataset = NascentDataset(
 train_loader = MixedBatchLoader(
     tss_dataset,
     tiled_dataset,
-    batch_size=64,
+    batch_size=BATCH_SIZE,
     tss_fraction=7 / 8,
     num_workers=4,
     pin_memory=True,
@@ -63,20 +76,25 @@ val_dataset = NascentDataset(
 )
 val_loader = torch.utils.data.DataLoader(
     val_dataset,
-    batch_size=64,
+    batch_size=BATCH_SIZE,
     shuffle=False,
     num_workers=4,
     pin_memory=True,
 )
 
-MAX_EPOCHS = 25
-WARMUP_STEPS = 500
-BATCH_SIZE = 64
-EARLY_STOPPING = 5
-
 # --- Model + optimizer ---
-model = TROGDOR(name="TROGDOR", pos_weight=10).cuda()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+model = TROGDOR(
+    name="TROGDOR",
+    loss_type="focal+tversky",
+    focal_alpha=FOCAL_ALPHA,
+    focal_gamma=FOCAL_GAMMA,
+    tversky_alpha=TVERSKY_ALPHA,
+    tversky_beta=TVERSKY_BETA,
+    tversky_lambda=TVERSKY_LAMBDA,
+).cuda()
+optimizer = torch.optim.AdamW(
+    model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+)
 
 # --- LR schedule: linear warmup + cosine decay ---
 total_steps = MAX_EPOCHS * len(train_loader)
@@ -99,13 +117,19 @@ run = wandb.init(
     config={
         "train_samples": TRAIN_SAMPLES,
         "val_samples": VAL_SAMPLES,
-        "batch_size": 64,
-        "lr": 1e-3,
-        "weight_decay": 1e-4,
+        "batch_size": BATCH_SIZE,
+        "lr": LEARNING_RATE,
+        "weight_decay": WEIGHT_DECAY,
         "max_epochs": MAX_EPOCHS,
-        "early_stopping": 5,
+        "early_stopping": EARLY_STOPPING,
         "warmup_steps": WARMUP_STEPS,
         "total_steps": total_steps,
+        "loss_type": "focal+tversky",
+        "focal_alpha": FOCAL_ALPHA,
+        "focal_gamma": FOCAL_GAMMA,
+        "tversky_alpha": TVERSKY_ALPHA,
+        "tversky_beta": TVERSKY_BETA,
+        "tversky_lambda": TVERSKY_LAMBDA,
     },
 )
 

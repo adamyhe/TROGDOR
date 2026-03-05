@@ -13,10 +13,11 @@ import pandas as pd
 import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
+from tqdm import tqdm
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
-from burninate.predict import predict_chromosome
-from burninate.trogdor import TROGDOR, normalization, standardization
+from chiaroscuro.predict import predict_chromosome
+from chiaroscuro.trogdor import TROGDOR, normalization, standardization
 
 
 def parse_args():
@@ -100,15 +101,14 @@ def main():
     all_probs = []
     all_labels = []
 
-    for chrom in chroms:
+    for chrom in tqdm(chroms, desc="Chromosomes", unit="chr"):
         if chrom not in chrom_sizes:
-            if args.verbose:
-                print(f"  Skipping {chrom} (not in bigWig)", flush=True)
+            tqdm.write(f"  Skipping {chrom} (not in bigWig)")
             continue
 
         chrom_len = chrom_sizes[chrom]
         if args.verbose:
-            print(f"  Scoring {chrom} ({chrom_len:,} bp)...", flush=True)
+            tqdm.write(f"  Scoring {chrom} ({chrom_len:,} bp)...")
 
         pl_vals = np.nan_to_num(
             np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)

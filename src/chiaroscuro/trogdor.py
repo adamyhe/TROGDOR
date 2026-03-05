@@ -12,6 +12,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.nn import BCEWithLogitsLoss
 from torcheval.metrics.functional import binary_auprc
 
@@ -27,7 +28,7 @@ def load_pretrained_model(name="TROGDOR_UNET.torch", model_params={}):
     of the deployed package.
     """
     model = TROGDOR(**model_params)
-    with importlib.resources.path("burninate", name) as path:
+    with importlib.resources.path("chiaroscuro", name) as path:
         model.load_state_dict(torch.load(path, weights_only=True), strict=False)
     return model
 
@@ -98,6 +99,32 @@ def standardization(t, x=0.05, y=0.01):
     beta = x * torch.max(t)
     alpha = (1 / beta) * np.log(1 / y - 1)
     return 1 / (1 + torch.exp(-alpha * (t - beta)))
+
+
+def focal_loss(logits, targets, alpha=0.999, gamma=2.0):
+    """Alpha-balanced focal loss (Lin et al. 2017).
+
+    Down-weights easy examples via (1 - p_t)^gamma, focusing training on
+    hard and uncertain bins. alpha weights the positive class.
+    """
+    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    p_t = torch.sigmoid(logits) * targets + (1 - torch.sigmoid(logits)) * (1 - targets)
+    alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+    return (alpha_t * (1 - p_t) ** gamma * bce).mean()
+
+
+def tversky_loss(logits, targets, alpha=0.3, beta=0.7, smooth=1.0):
+    """Tversky loss for imbalanced segmentation.
+
+    alpha weights FP, beta weights FN. beta > alpha penalises missed
+    positives more than false alarms, which is appropriate when
+    positives are rare and recall matters.
+    """
+    p = torch.sigmoid(logits)
+    tp = (p * targets).sum()
+    fp = (p * (1 - targets)).sum()
+    fn = ((1 - p) * targets).sum()
+    return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
 
 
 class Conv1DBlock(torch.nn.Module):
@@ -235,6 +262,12 @@ class TROGDOR(torch.nn.Module):
         name="TROGDOR",
         verbose=True,
         pos_weight=None,
+        loss_type="bce",
+        focal_alpha=0.999,
+        focal_gamma=2.0,
+        tversky_alpha=0.3,
+        tversky_beta=0.7,
+        tversky_lambda=1.0,
     ):
         super(TROGDOR, self).__init__()
         self.name = name
@@ -291,12 +324,24 @@ class TROGDOR(torch.nn.Module):
         # Output head
         self.head = torch.nn.Conv1d(ch, 1, kernel_size=1)
 
+        self._loss_type = loss_type
+        self._focal_alpha = focal_alpha
+        self._focal_gamma = focal_gamma
+        self._tversky_alpha = tversky_alpha
+        self._tversky_beta = tversky_beta
+        self._tversky_lambda = tversky_lambda
+
         if pos_weight is not None:
             self.register_buffer("_pos_weight", torch.tensor([pos_weight]))
-            self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
         else:
             self._pos_weight = None
-            self.loss = BCEWithLogitsLoss(reduction="none")
+        # BCE loss module (used when loss_type="bce" or "bce+tversky")
+        if loss_type in ("bce", "bce+tversky"):
+            if pos_weight is not None:
+                self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
+            else:
+                self.loss = BCEWithLogitsLoss(reduction="none")
+
         self.logger = Logger(
             [
                 "Epoch",
@@ -386,11 +431,8 @@ class TROGDOR(torch.nn.Module):
         """
         iteration = 0
         early_stop_count = 0
-        best_loss = float("inf")
+        best_auprc = 0.0
         self.logger.start()
-
-        if self._pos_weight is not None:
-            self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
 
         for epoch in range(max_epochs):
             tic = time.time()
@@ -406,7 +448,18 @@ class TROGDOR(torch.nn.Module):
 
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
                     logits = self(X)
-                    loss = self.loss(logits, y).mean()
+                    if self._loss_type == "bce":
+                        loss = self.loss(logits, y).mean()
+                    elif self._loss_type == "focal":
+                        loss = focal_loss(logits, y, self._focal_alpha, self._focal_gamma)
+                    elif self._loss_type == "tversky":
+                        loss = tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta)
+                    elif self._loss_type == "focal+tversky":
+                        loss = (focal_loss(logits, y, self._focal_alpha, self._focal_gamma)
+                                + self._tversky_lambda * tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta))
+                    elif self._loss_type == "bce+tversky":
+                        loss = (self.loss(logits, y).mean()
+                                + self._tversky_lambda * tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta))
 
                 loss.backward()
                 optimizer.step()
@@ -480,7 +533,7 @@ class TROGDOR(torch.nn.Module):
                             val_loss_,
                             val_auprc.item(),
                             val_dice.item(),
-                            (val_loss_ < best_loss),
+                            (val_auprc.item() > best_auprc),
                         ]
                     )
                     self.logger.save(f"{self.name}.log")
@@ -495,9 +548,9 @@ class TROGDOR(torch.nn.Module):
                             step=iteration,
                         )
 
-                    if val_loss_ < best_loss:
+                    if val_auprc.item() > best_auprc:
                         torch.save(self.state_dict(), f"{self.name}.torch")
-                        best_loss = val_loss_
+                        best_auprc = val_auprc.item()
                         early_stop_count = 0
                     else:
                         early_stop_count += 1

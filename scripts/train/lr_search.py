@@ -10,9 +10,9 @@ import torch.nn.functional as F
 import wandb
 from torcheval.metrics.functional import binary_auprc
 
-from burninate.dataset import MixedBatchLoader, NascentDataset
-from burninate.predict import predict
-from burninate.trogdor import TROGDOR, normalization
+from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
+from chiaroscuro.predict import predict
+from chiaroscuro.trogdor import TROGDOR, normalization
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 

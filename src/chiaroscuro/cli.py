@@ -20,8 +20,8 @@ import numpy as np
 import pybigtools
 import torch
 
-from burninate.predict import predict_chromosome
-from burninate.trogdor import load_pretrained_model, normalization
+from chiaroscuro.predict import predict_chromosome
+from chiaroscuro.trogdor import load_pretrained_model, normalization
 
 _help = """
 The following commands are available:
@@ -31,7 +31,7 @@ The following commands are available:
 """
 
 
-def chiaroscuro():
+def cli():
     # Create argument parser
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -243,4 +243,4 @@ def chiaroscuro():
 
 
 if __name__ == "__main__":
-    chiaroscuro()
+    cli()

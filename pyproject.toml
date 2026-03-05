@@ -20,17 +20,17 @@ dependencies = [
 ]
 
 [project.scripts]
-TROGDOR = "burninate.cli:chiaroscuro"
-trogdor = "burninate.cli:chiaroscuro"
-dREG = "burninate.cli:chiaroscuro"
-dreg = "burninate.cli:chiaroscuro"
+TROGDOR = "chiaroscuro.cli:cli"
+trogdor = "chiaroscuro.cli:cli"
+dREG = "chiaroscuro.cli:cli"
+dreg = "chiaroscuro.cli:cli"
 
 [project.optional-dependencies]
 dev = ["pytest", "wandb"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["burninate"]
+packages = ["chiaroscuro"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

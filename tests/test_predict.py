@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from burninate.predict import predict, predict_chromosome
+from chiaroscuro.predict import predict, predict_chromosome
 
 
 # ---------------------------------------------------------------------------
