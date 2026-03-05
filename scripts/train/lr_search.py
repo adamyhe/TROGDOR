@@ -12,7 +12,7 @@ from torcheval.metrics.functional import binary_auprc
 
 from burninate.dataset import MixedBatchLoader, NascentDataset
 from burninate.predict import predict
-from burninate.trogdor import TROGDOR, standardization
+from burninate.trogdor import TROGDOR, normalization
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 
@@ -33,7 +33,7 @@ tss_dataset = NascentDataset(
     train_pl,
     train_mn,
     tss_beds=train_tss,
-    transform=standardization,
+    transform=normalization,
     rc_prob=0.5,
     max_jitter=2**14,
     tss_centered=True,
@@ -42,7 +42,7 @@ tiled_dataset = NascentDataset(
     train_pl,
     train_mn,
     tss_beds=train_tss,
-    transform=standardization,
+    transform=normalization,
     rc_prob=0.5,
     max_jitter=2**14,
 )
@@ -59,7 +59,7 @@ val_dataset = NascentDataset(
     val_pl,
     val_mn,
     tss_beds=val_tss,
-    transform=standardization,
+    transform=normalization,
 )
 val_loader = torch.utils.data.DataLoader(
     val_dataset,

@@ -2,8 +2,9 @@
 # Contact: Jacob Schreiber <jmschreiber91@gmail.com>
 
 """
-predict.py
-Copied from tangermeme v1.0.2 by Jacob Schreiber to reduce dependencies.
+The predict function is copied from tangermeme v1.0.2 by Jacob Schreiber to reduce
+dependencies. predict_chromosome wraps the predict function to tile predictions
+across a whole chromosome.
 """
 
 import torch
@@ -154,6 +155,7 @@ def predict_chromosome(
     output_stride=16,
     batch_size=8,
     device="cuda",
+    transform=None,
 ):
     """Score a full chromosome with chunked sliding-window inference.
 
@@ -167,7 +169,12 @@ def predict_chromosome(
         A model that accepts (B, 2, chunk_size) and returns
         (B, 1, chunk_size // output_stride).
     signal : torch.Tensor, shape=(2, total_length)
-        Single chromosome signal, already standardized.
+        Single chromosome signal (raw, unnormalized).
+    transform : callable or None, optional
+        A function applied to each chunk independently before the forward pass.
+        Receives a (2, chunk_size) tensor and returns a transformed tensor of
+        the same shape. Use this for per-chunk normalization so that the
+        normalization matches training. Default is None (no transform).
     chunk_size : int, optional
         Length of each input chunk fed to the model. Must be divisible by
         output_stride. Default is 262144 (2^18).
@@ -196,10 +203,15 @@ def predict_chromosome(
         raise ValueError(
             f"overlap ({overlap}) must be divisible by output_stride ({output_stride})"
         )
-
     model = model.to(device).eval()
     total_length = signal.shape[1]
     stride = chunk_size - 2 * overlap
+
+    if total_length < chunk_size:
+        raise ValueError(
+            f"total_length ({total_length}) is smaller than chunk_size ({chunk_size}). "
+            f"Pass chunk_size <= {total_length} to score this contig."
+        )
 
     # Build list of chunk start positions (in input coordinates)
     starts = list(range(0, total_length - chunk_size + 1, stride))
@@ -221,7 +233,10 @@ def predict_chromosome(
             # Build batch tensor
             chunks = []
             for s in batch_starts:
-                chunks.append(signal[:, s : s + chunk_size])
+                chunk = signal[:, s : s + chunk_size]
+                if transform is not None:
+                    chunk = transform(chunk)
+                chunks.append(chunk)
             X_batch = torch.stack(chunks).to(device)  # (B, 2, chunk_size)
 
             preds = model(X_batch).cpu()  # (B, 1, out_chunk)

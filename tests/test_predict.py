@@ -181,6 +181,14 @@ class TestPredictChromosome:
             predict_chromosome(model, signal, chunk_size=4097, overlap=512,
                                 output_stride=16, device="cpu")
 
+    def test_chrom_shorter_than_chunk_size_raises(self):
+        """Chromosome smaller than chunk_size must raise a clear ValueError."""
+        model = IdentityUNet(output_stride=16)
+        signal = self._make_signal(2000)   # < chunk_size=4096
+        with pytest.raises(ValueError, match="chunk_size"):
+            predict_chromosome(model, signal, chunk_size=4096, overlap=512,
+                               output_stride=16, batch_size=1, device="cpu")
+
     def test_overlap_not_divisible_raises(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)

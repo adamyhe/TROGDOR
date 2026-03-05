@@ -11,31 +11,56 @@ from burninate.trogdor import (
     DoubleConv1D,
     EncoderBlock,
     DecoderBlock,
-    standardization,
+    normalization,
 )
 
 
 # ---------------------------------------------------------------------------
-# standardization
+# normalization
 # ---------------------------------------------------------------------------
 
-class TestStandardization:
+class TestNormalization:
     def test_output_range(self):
         t = torch.rand(2, 1000) * 100
-        out = standardization(t)
+        out = normalization(t)
         assert out.min() >= 0.0
         assert out.max() <= 1.0
 
     def test_shape_preserved(self):
         t = torch.rand(2, 500)
-        out = standardization(t)
+        out = normalization(t)
         assert out.shape == t.shape
 
     def test_all_zeros(self):
         t = torch.zeros(2, 100)
-        out = standardization(t)
+        out = normalization(t)
         assert out.shape == t.shape
         assert torch.all(out == 0.0)
+
+    def test_per_strand_independence(self):
+        t = torch.zeros(2, 1000)
+        t[0] = torch.ones(1000) * 10
+        t[0, 0] = 10000  # spike on strand 0
+        t[1] = torch.ones(1000) * 10  # moderate values on strand 1
+        out = normalization(t)
+        assert out[1].mean() > 0.3
+
+    def test_spike_robustness(self):
+        t = torch.zeros(1, 1000)
+        t[0] = torch.ones(1000) * 10
+        t[0, 0] = 10000  # single spike
+        out = normalization(t)
+        assert out[0].mean() > 0.3
+
+    def test_gene_desert_noise_suppressed(self):
+        """1-read background noise should not amplify to ~1.0 in gene deserts."""
+        t = torch.zeros(1, 10000)
+        # Scatter ~5% positions with single-read background noise
+        noise_idx = torch.randperm(10000)[:500]
+        t[0, noise_idx] = 1.0
+        out = normalization(t)
+        # With min_ref=20: beta=1.0, F(1 read) = sigmoid(0) = 0.5 (not amplified)
+        assert out.max() <= 0.5
 
 
 # ---------------------------------------------------------------------------

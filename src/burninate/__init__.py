@@ -1,4 +1,4 @@
-from .trogdor import TROGDOR, load_pretrained_model, standardization
+from .trogdor import TROGDOR, load_pretrained_model, normalization
 from .predict import predict, predict_chromosome
 
 from importlib.metadata import version, PackageNotFoundError

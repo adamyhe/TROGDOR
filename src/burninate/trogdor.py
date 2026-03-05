@@ -28,36 +28,60 @@ def load_pretrained_model(name="TROGDOR_UNET.torch", model_params={}):
     """
     model = TROGDOR(**model_params)
     with importlib.resources.path("burninate", name) as path:
-        model.load_state_dict(torch.load(path, weights_only=True))
+        model.load_state_dict(torch.load(path, weights_only=True), strict=False)
     return model
 
 
-def standardization(t, x=0.05, y=0.01):
+def normalization(t, x=0.05, y=0.01, min_ref=20):
     """
-    A logistic standardization function as described in Danko et al. 2015.
-    Given a (2, L) representation of nascent RNA sequencing coverage,
-    squashes values to (0, 1) using a logistic function.
+    Normalize each strand of nascent RNA coverage to (0, 1) using a
+    per-strand logistic function, following Danko et al. 2015.
+
+    For each strand independently:
+      1. Compute ``ref`` as the 99th percentile of nonzero values,
+         clamped to at least ``min_ref``.
+      2. Set the inflection point ``beta = x * ref``.
+      3. Derive slope ``alpha`` so that the logistic equals ``y`` at zero
+         coverage: ``alpha = log(1/y - 1) / beta``.
+      4. Apply ``F(v) = 1 / (1 + exp(-alpha * (v - beta)))``.
+
+    Strands with no nonzero coverage are left as zeros.
 
     Parameters
     ----------
-    t : torch.Tensor
-        A tensor representation of nascent RNA sequencing coverage.
-    x : float, default = 0.05
-        A scaling parameter for the logistic standardization.
-    y : float, default = 0.01
-        A second scaling parameter for the logistic standardization
+    t : torch.Tensor, shape (C, L)
+        Stranded nascent RNA sequencing coverage; one row per strand.
+    x : float, default 0.05
+        Inflection point as a fraction of ``ref``; controls where the
+        logistic transitions from low to high.
+    y : float, default 0.01
+        Logistic value at zero coverage; sets the baseline suppression
+        of background signal.
+    min_ref : float, default 20
+        Minimum value for ``ref``, preventing extreme slopes on very
+        low-coverage strands.
 
     Returns
-    ----------
-    F : torch.Tensor
-        A scaled tensor, values squashed to (0, 1)
+    -------
+    result : torch.Tensor, shape (C, L)
+        Coverage values mapped to (0, 1) per strand.
     """
-    if torch.max(t) == 0:
-        return torch.zeros_like(t)
-    beta = x * torch.max(t)
-    alpha = (1 / beta) * np.log(1 / y - 1)
-    F = 1 / (1 + torch.exp(-alpha * (t - beta)))
-    return F
+    result = torch.zeros_like(t)
+    for i in range(t.shape[0]):
+        strand = t[i]
+        nonzero = strand[strand > 0]
+        if nonzero.numel() == 0:
+            continue
+        ref = (
+            torch.quantile(nonzero.float(), 0.99)
+            if nonzero.numel() >= 2
+            else nonzero.max()
+        )
+        ref = max(ref.item(), min_ref)
+        beta = x * ref
+        alpha = (1 / beta) * np.log(1 / y - 1)
+        result[i] = 1 / (1 + torch.exp(-alpha * (strand - beta)))
+    return result
 
 
 class Conv1DBlock(torch.nn.Module):
@@ -412,9 +436,7 @@ class TROGDOR(torch.nn.Module):
                     logits_val = torch.cat(logits_val)
 
                     pos_weight = (
-                        self._pos_weight.cpu()
-                        if self._pos_weight is not None
-                        else None
+                        self._pos_weight.cpu() if self._pos_weight is not None else None
                     )
                     val_loss = torch.nn.functional.binary_cross_entropy_with_logits(
                         logits_val, y_val, pos_weight=pos_weight, reduction="none"

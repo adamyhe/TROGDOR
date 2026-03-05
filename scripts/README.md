@@ -7,10 +7,10 @@ Most users do not need them — the pre-trained model is bundled with the packag
 
 ```
 scripts/
-  data/     download_training_data.sh  — fetch K562 PRO/GRO-seq bigWigs from GEO
-  train/    train.py                   — train TROGDOR on K562 data
-            lr_search.py               — grid search over learning rates (1e-6 to 1e-3)
-  benchmark/                           — (planned) benchmarking utilities
+  data/       download_training_data.sh  — fetch K562 PRO/GRO-seq bigWigs from GEO
+  train/      train.py                   — train TROGDOR on K562 data
+              lr_search.py               — grid search over learning rates (1e-6 to 1e-3)
+  benchmark/  benchmark.py               — genome-wide AUROC/AUPRC evaluation
 ```
 
 ## 1. Download training data
@@ -68,6 +68,33 @@ wandb login
 
 Metrics logged per batch: `train/bce`, `train/lr`.
 Metrics logged per epoch: `val/bce`, `val/auprc`, `val/dice`.
+
+## 3. Benchmark
+
+Score the whole genome against ground-truth peaks and report AUROC/AUPRC:
+
+```bash
+python scripts/benchmark/benchmark.py \
+  -M TROGDOR.torch \
+  -p data/G6.pl.bw \
+  -m data/G6.mn.bw \
+  -t data/K562.positive.bed.gz \
+  --chroms chr1 chr2 \
+  -v
+```
+
+| Flag | Description |
+|------|-------------|
+| `-M/--model` | Path to `.torch` state dict |
+| `-p/--pl_bigwig` | Plus-strand bigWig |
+| `-m/--mn_bigwig` | Minus-strand bigWig |
+| `-t/--peaks` | Ground-truth peak BED (gzipped OK) |
+| `-d/--device` | Device (default: `cuda`) |
+| `--output_stride` | Bin size in bp (default: `16`) |
+| `--chroms` | Chromosome whitelist (default: all) |
+| `-v/--verbose` | Print per-chromosome progress |
+
+Expected output on K562 data: AUROC > 0.9, AUPRC meaningfully above the positive rate (~1%).
 
 ### Mixed precision
 

@@ -21,7 +21,7 @@ import pybigtools
 import torch
 
 from burninate.predict import predict_chromosome
-from burninate.trogdor import load_pretrained_model, standardization
+from burninate.trogdor import load_pretrained_model, normalization
 
 _help = """
 The following commands are available:
@@ -188,18 +188,25 @@ def chiaroscuro():
 
             chrom_len = chrom_sizes[chrom]
 
+            if chrom_len < args.chunk_size:
+                if args.verbose:
+                    print(
+                        f"Skipping {chrom}: length {chrom_len} bp is shorter than "
+                        f"--chunk_size {args.chunk_size}. Re-run with --chunk_size <= {chrom_len} to score it."
+                    )
+                continue
+
             if args.verbose:
                 print(f"Scoring {chrom} ({chrom_len} bp)...")
 
             pl_vals = np.nan_to_num(
                 np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
             )
-            mn_vals = np.nan_to_num(
+            mn_vals = np.abs(np.nan_to_num(
                 np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-            )
+            ))
 
             signal = torch.from_numpy(np.stack([pl_vals, mn_vals])).float()
-            signal = standardization(signal)
 
             logits = predict_chromosome(
                 model,
@@ -208,6 +215,7 @@ def chiaroscuro():
                 overlap=args.overlap,
                 output_stride=args.output_stride,
                 device=args.device,
+                transform=normalization,
             )
 
             probs = torch.sigmoid(logits).squeeze(0).numpy()  # (chrom_len // output_stride,)
