@@ -16,7 +16,7 @@ from torcheval.metrics.functional import binary_auprc, binary_auroc
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
 from burninate.predict import predict_chromosome
-from burninate.trogdor import TROGDOR, normalization
+from burninate.trogdor import TROGDOR, normalization, standardization
 
 
 def parse_args():
@@ -41,6 +41,11 @@ def parse_args():
         nargs="+",
         default=None,
         help="Chromosome whitelist (default: all in bigWig)",
+    )
+    p.add_argument(
+        "--standardization",
+        action="store_true",
+        help="Use the deprecated global-max standardization instead of per-strand normalization",
     )
     p.add_argument(
         "-v", "--verbose", action="store_true", help="Print per-chromosome progress"
@@ -74,6 +79,7 @@ def encode_labels(peaks_df, chrom, chrom_len, output_stride):
 def main():
     args = parse_args()
 
+    transform = standardization if args.standardization else normalization
     model = load_model(args.model, args.device)
 
     pl_bw = pybigtools.open(args.pl_bigwig)
@@ -119,7 +125,7 @@ def main():
                 signal,
                 output_stride=args.output_stride,
                 device=args.device,
-                transform=normalization,
+                transform=transform,
             )  # (1, L // stride)
 
         probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()  # (n_bins,)

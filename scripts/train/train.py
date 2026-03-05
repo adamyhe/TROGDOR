@@ -69,8 +69,10 @@ val_loader = torch.utils.data.DataLoader(
     pin_memory=True,
 )
 
-MAX_EPOCHS = 20
+MAX_EPOCHS = 25
 WARMUP_STEPS = 500
+BATCH_SIZE = 64
+EARLY_STOPPING = 5
 
 # --- Model + optimizer ---
 model = TROGDOR(name="TROGDOR", pos_weight=10).cuda()
@@ -113,8 +115,8 @@ model.fit(
     optimizer,
     val_loader,
     max_epochs=MAX_EPOCHS,
-    batch_size=64,
-    early_stopping=5,
+    batch_size=BATCH_SIZE,
+    early_stopping=EARLY_STOPPING,
     verbose=True,
     wandb_run=run,
     scheduler=scheduler,

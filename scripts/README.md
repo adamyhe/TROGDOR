@@ -10,7 +10,8 @@ scripts/
   data/       download_training_data.sh  — fetch K562 PRO/GRO-seq bigWigs from GEO
   train/      train.py                   — train TROGDOR on K562 data
               lr_search.py               — grid search over learning rates (1e-6 to 1e-3)
-  benchmark/  benchmark.py               — genome-wide AUROC/AUPRC evaluation
+  benchmark/  benchmark.py               — genome-wide AUROC/AUPRC from a trained model
+              benchmark_bw.py            — genome-wide AUROC/AUPRC from a pre-computed prob bigWig
 ```
 
 ## 1. Download training data
@@ -95,6 +96,24 @@ python scripts/benchmark/benchmark.py \
 | `-v/--verbose` | Print per-chromosome progress |
 
 Expected output on K562 data: AUROC > 0.9, AUPRC meaningfully above the positive rate (~1%).
+
+To benchmark a model that outputs a pre-computed probability bigWig (e.g. a baseline method):
+
+```bash
+python scripts/benchmark/benchmark_bw.py \
+  -b predictions.bw \
+  -t data/K562.positive.bed.gz \
+  --chroms chr1 chr2 \
+  -v
+```
+
+| Flag | Description |
+|------|-------------|
+| `-b/--bigwig` | Pre-computed probability bigWig |
+| `-t/--peaks` | Ground-truth peak BED (gzipped OK) |
+| `--output_stride` | Bin size in bp; probs are max-pooled to this resolution (default: `16`) |
+| `--chroms` | Chromosome whitelist (default: all) |
+| `-v/--verbose` | Print per-chromosome progress |
 
 ### Mixed precision
 

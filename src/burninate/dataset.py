@@ -2,9 +2,7 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-This module defines dataset classes used for training TROGDOR. It is included in
-this package purely for illustrative purposes/development convenience, and is
-not used in deployment.
+This module defines dataset classes used for loading data for TROGDOR.
 """
 
 import numpy as np
@@ -15,7 +13,10 @@ import tqdm
 
 
 class NascentDataset_(torch.utils.data.Dataset):
-    """Dataset backed by pre-processed .npz files.
+    """
+    NOT USED. Has been replaced by NascentDataset. TODO: delete?
+
+    Dataset backed by pre-processed .npz files.
 
     Each .npz file must contain:
         "X" : array of shape (N, 2, L) — stranded nascent RNA coverage

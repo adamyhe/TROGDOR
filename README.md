@@ -10,21 +10,20 @@ is bundled with the package — most users will only need to install and run the
 
 ## Usage
 
-An end-to-end pipeline can be run to identify peak regions using TROGDOR.
+Score the genome and call peaks in two steps (only scoring requires a GPU):
 
 ```bash
-trogdor pipeline # Finish writing this
-```
-
-This bundles together region scoring and peak identification, which can be run separately
-(only the scoring step requires GPUs).
-
-```bash
-trogdor score -p plus.bw -m minus.bw -o scores.bed -d cuda
-trogdor peaks -t scores.bed -o peaks.bed --fdr_threshold 0.05
+trogdor score -p plus.bw -m minus.bw -o scores.bw -d cuda
+trogdor peaks -t scores.bw -o peaks.bed --fdr_threshold 0.05
 ```
 
 Input: stranded bigWig files. Output: BED file of called TIR peaks.
+
+`scores.bw` is an intermediate bigWig of per-bin predicted probabilities at
+`--output_stride` bp resolution (default: 16 bp).
+
+> **Note**: `peaks` is not yet implemented. The `pipeline` subcommand (a planned
+> wrapper for both steps) is also not yet implemented.
 
 ## Installation
 
@@ -42,7 +41,7 @@ pip install -e ".[dev]"
 
 ### Testing
 
-Run the full unit test suite (70 tests, no data files required):
+Run the full unit test suite (no data files required):
 
 ```bash
 pytest tests/

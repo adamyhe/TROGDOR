@@ -84,6 +84,22 @@ def normalization(t, x=0.05, y=0.01, min_ref=20):
     return result
 
 
+def standardization(t, x=0.05, y=0.01):
+    """Backwards-compatible alias for the original single-pass normalization.
+
+    .. deprecated::
+        Use :func:`normalization` instead. This function scales by the global
+        maximum of the whole tensor rather than per-strand 99th percentile,
+        making it sensitive to outlier spikes and treating both strands with
+        the same reference point.
+    """
+    if torch.max(t) == 0:
+        return torch.zeros_like(t)
+    beta = x * torch.max(t)
+    alpha = (1 / beta) * np.log(1 / y - 1)
+    return 1 / (1 + torch.exp(-alpha * (t - beta)))
+
+
 class Conv1DBlock(torch.nn.Module):
     """
     A small class that applies the conv + reduction operation at the core of the
