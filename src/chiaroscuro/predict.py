@@ -156,6 +156,7 @@ def predict_chromosome(
     batch_size=8,
     device="cuda",
     transform=None,
+    verbose=False,
 ):
     """Score a full chromosome with chunked sliding-window inference.
 
@@ -189,6 +190,8 @@ def predict_chromosome(
         Number of chunks to process in one forward pass. Default is 8.
     device : str, optional
         Device for inference. Default is "cuda".
+    verbose : bool, optional
+        Whether to display a tqdm progress bar over chunks. Default is False.
 
     Returns
     -------
@@ -203,7 +206,6 @@ def predict_chromosome(
         raise ValueError(
             f"overlap ({overlap}) must be divisible by output_stride ({output_stride})"
         )
-    model = model.to(device).eval()
     total_length = signal.shape[1]
     stride = chunk_size - 2 * overlap
 
@@ -219,51 +221,36 @@ def predict_chromosome(
     if not starts or starts[-1] + chunk_size < total_length:
         starts.append(total_length - chunk_size)
 
-    # Output-space dimensions
+    # Build all chunks (with transform applied) into a single batch tensor
+    chunks = []
+    for s in starts:
+        chunk = signal[:, s : s + chunk_size]
+        if transform is not None:
+            chunk = transform(chunk)
+        chunks.append(chunk)
+    X_all = torch.stack(chunks)  # (n_chunks, 2, chunk_size)
+
+    # Batched inference via predict(); returns (n_chunks, 1, out_chunk) on CPU
+    preds = predict(model, X_all, batch_size=batch_size, device=device, verbose=verbose)
+
+    # Stitch center crops into the output tensor
     out_total = total_length // output_stride
     out_chunk = chunk_size // output_stride
     out_overlap = overlap // output_stride
 
     scores = torch.zeros(1, out_total)
 
-    with torch.no_grad():
-        for batch_start in range(0, len(starts), batch_size):
-            batch_starts = starts[batch_start : batch_start + batch_size]
+    for chunk_idx, s in enumerate(starts):
+        is_first = chunk_idx == 0
+        is_last = s + chunk_size >= total_length
 
-            # Build batch tensor
-            chunks = []
-            for s in batch_starts:
-                chunk = signal[:, s : s + chunk_size]
-                if transform is not None:
-                    chunk = transform(chunk)
-                chunks.append(chunk)
-            X_batch = torch.stack(chunks).to(device)  # (B, 2, chunk_size)
+        out_s = s // output_stride
+        pred_start = 0 if is_first else out_overlap
+        pred_end = out_chunk if is_last else out_chunk - out_overlap
+        out_start = out_s if is_first else out_s + out_overlap
+        out_end = out_total if is_last else out_s + out_chunk - out_overlap
 
-            preds = model(X_batch).cpu()  # (B, 1, out_chunk)
-
-            # Write center crops into the output tensor (all indices in output space)
-            for i, s in enumerate(batch_starts):
-                chunk_idx = batch_start + i
-                is_first = chunk_idx == 0
-                is_last = s + chunk_size >= total_length
-
-                out_s = s // output_stride
-
-                if is_first:
-                    out_start = out_s
-                    pred_start = 0
-                else:
-                    out_start = out_s + out_overlap
-                    pred_start = out_overlap
-
-                if is_last:
-                    out_end = out_total
-                    pred_end = out_chunk
-                else:
-                    out_end = out_s + out_chunk - out_overlap
-                    pred_end = out_chunk - out_overlap
-
-                scores[:, out_start:out_end] = preds[i, :, pred_start:pred_end]
+        scores[:, out_start:out_end] = preds[chunk_idx, :, pred_start:pred_end]
 
     return scores
 

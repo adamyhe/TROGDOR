@@ -107,8 +107,6 @@ def main():
             continue
 
         chrom_len = chrom_sizes[chrom]
-        if args.verbose:
-            tqdm.write(f"  Scoring {chrom} ({chrom_len:,} bp)...")
 
         pl_vals = np.nan_to_num(
             np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
@@ -126,6 +124,7 @@ def main():
                 output_stride=args.output_stride,
                 device=args.device,
                 transform=transform,
+                verbose=args.verbose,
             )  # (1, L // stride)
 
         probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()  # (n_bins,)
