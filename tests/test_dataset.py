@@ -12,10 +12,10 @@ import torch
 
 from chiaroscuro.dataset import MixedBatchLoader, NascentDataset, NascentDataset_
 
-
 # ---------------------------------------------------------------------------
 # NascentDataset_ (npz-backed)
 # ---------------------------------------------------------------------------
+
 
 class TestNascentDataset_:
     @pytest.fixture
@@ -131,6 +131,7 @@ class TestNascentDataset_:
 # NascentDataset (bigwig-backed) — integration tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 class TestNascentDataset:
     """
@@ -146,6 +147,7 @@ class TestNascentDataset:
 # NascentDataset — tss_centered validation (no BigWig needed)
 # ---------------------------------------------------------------------------
 
+
 class TestNascentDatasetTssCentered:
     def test_tss_centered_requires_tss_beds(self):
         with pytest.raises(ValueError, match="tss_beds"):
@@ -160,6 +162,7 @@ class TestNascentDatasetTssCentered:
 # ---------------------------------------------------------------------------
 # MixedBatchLoader
 # ---------------------------------------------------------------------------
+
 
 class TestMixedBatchLoader:
     @pytest.fixture
@@ -180,9 +183,7 @@ class TestMixedBatchLoader:
     @pytest.fixture
     def loader(self, datasets):
         tiled_ds, tss_ds, L, output_stride = datasets
-        return MixedBatchLoader(
-            tiled_ds, tss_ds, batch_size=8, tss_fraction=0.25
-        )
+        return MixedBatchLoader(tiled_ds, tss_ds, batch_size=8, tss_fraction=0.25)
 
     def test_sub_batch_sizes(self, loader):
         assert loader.tss_batch_size == 2

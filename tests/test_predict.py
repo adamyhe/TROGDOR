@@ -8,10 +8,10 @@ import torch.nn as nn
 
 from chiaroscuro.predict import predict, predict_chromosome
 
-
 # ---------------------------------------------------------------------------
 # Minimal mock models for testing
 # ---------------------------------------------------------------------------
+
 
 class IdentityUNet(nn.Module):
     """Returns a (B, 1, L//output_stride) tensor of zeros."""
@@ -49,12 +49,13 @@ class EchoFirstChannel(nn.Module):
         self.output_stride = output_stride
 
     def forward(self, x):
-        return x[:, :1, ::self.output_stride]  # (B, 1, L//output_stride)
+        return x[:, :1, :: self.output_stride]  # (B, 1, L//output_stride)
 
 
 # ---------------------------------------------------------------------------
 # predict() (existing utility) — uses output_stride=1 models
 # ---------------------------------------------------------------------------
+
 
 class TestPredict:
     def test_basic_shape(self):
@@ -86,6 +87,7 @@ class TestPredict:
 # predict_chromosome()
 # ---------------------------------------------------------------------------
 
+
 class TestPredictChromosome:
     def _make_signal(self, length):
         return torch.randn(2, length)
@@ -93,15 +95,29 @@ class TestPredictChromosome:
     def test_output_shape(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(8192)
-        out = predict_chromosome(model, signal, chunk_size=4096, overlap=512,
-                                  output_stride=16, batch_size=2, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=4096,
+            overlap=512,
+            output_stride=16,
+            batch_size=2,
+            device="cpu",
+        )
         assert out.shape == (1, 512), f"Expected (1,512), got {out.shape}"
 
     def test_short_chrom_exact_one_chunk(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)
-        out = predict_chromosome(model, signal, chunk_size=4096, overlap=512,
-                                  output_stride=16, batch_size=1, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=4096,
+            overlap=512,
+            output_stride=16,
+            batch_size=1,
+            device="cpu",
+        )
         assert out.shape == (1, 256)
 
     def test_chrom_shorter_than_stride(self):
@@ -111,9 +127,15 @@ class TestPredictChromosome:
         overlap = 32
         total = 300  # > chunk_size but < 2*stride
         signal = self._make_signal(total)
-        out = predict_chromosome(model, signal, chunk_size=chunk_size,
-                                  overlap=overlap, output_stride=16,
-                                  batch_size=2, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            output_stride=16,
+            batch_size=2,
+            device="cpu",
+        )
         assert out.shape == (1, total // 16)
 
     def test_constant_model_fills_output(self):
@@ -122,8 +144,15 @@ class TestPredictChromosome:
         model = ConstantUNet(value=value, output_stride=16)
         total = 6144  # divisible by 16
         signal = self._make_signal(total)
-        out = predict_chromosome(model, signal, chunk_size=2048, overlap=256,
-                                  output_stride=16, batch_size=4, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=2048,
+            overlap=256,
+            output_stride=16,
+            batch_size=4,
+            device="cpu",
+        )
         assert out.shape == (1, total // 16)
         assert torch.allclose(out, torch.full_like(out, value), atol=1e-5), (
             f"Not all values equal {value}: min={out.min()}, max={out.max()}"
@@ -133,8 +162,15 @@ class TestPredictChromosome:
         """Position 0 (first output bin) must be written (first chunk left edge not cropped)."""
         model = ConstantUNet(value=1.0, output_stride=16)
         signal = self._make_signal(5120)
-        out = predict_chromosome(model, signal, chunk_size=2048, overlap=256,
-                                  output_stride=16, batch_size=2, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=2048,
+            overlap=256,
+            output_stride=16,
+            batch_size=2,
+            device="cpu",
+        )
         assert out[0, 0].item() == pytest.approx(1.0)
 
     def test_last_chunk_no_right_crop(self):
@@ -142,22 +178,43 @@ class TestPredictChromosome:
         model = ConstantUNet(value=1.0, output_stride=16)
         total = 5120
         signal = self._make_signal(total)
-        out = predict_chromosome(model, signal, chunk_size=2048, overlap=256,
-                                  output_stride=16, batch_size=2, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=2048,
+            overlap=256,
+            output_stride=16,
+            batch_size=2,
+            device="cpu",
+        )
         assert out[0, total // 16 - 1].item() == pytest.approx(1.0)
 
     def test_batch_size_one(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)
-        out = predict_chromosome(model, signal, chunk_size=1024, overlap=128,
-                                  output_stride=16, batch_size=1, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=1024,
+            overlap=128,
+            output_stride=16,
+            batch_size=1,
+            device="cpu",
+        )
         assert out.shape == (1, 4096 // 16)
 
     def test_large_batch_size(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)
-        out = predict_chromosome(model, signal, chunk_size=1024, overlap=128,
-                                  output_stride=16, batch_size=100, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=1024,
+            overlap=128,
+            output_stride=16,
+            batch_size=100,
+            device="cpu",
+        )
         assert out.shape == (1, 4096 // 16)
 
     def test_echo_model_passthrough(self):
@@ -168,9 +225,15 @@ class TestPredictChromosome:
         signal = torch.zeros(2, total)
         # Mark position 0 on the plus strand (first output bin, first chunk, no left crop)
         signal[0, 0] = 99.0
-        out = predict_chromosome(model, signal, chunk_size=1024, overlap=128,
-                                  output_stride=output_stride, batch_size=2,
-                                  device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=1024,
+            overlap=128,
+            output_stride=output_stride,
+            batch_size=2,
+            device="cpu",
+        )
         assert out.shape == (1, total // output_stride)
         assert out[0, 0].item() == pytest.approx(99.0)
 
@@ -178,29 +241,55 @@ class TestPredictChromosome:
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)
         with pytest.raises(ValueError, match="chunk_size"):
-            predict_chromosome(model, signal, chunk_size=4097, overlap=512,
-                                output_stride=16, device="cpu")
+            predict_chromosome(
+                model,
+                signal,
+                chunk_size=4097,
+                overlap=512,
+                output_stride=16,
+                device="cpu",
+            )
 
     def test_chrom_shorter_than_chunk_size_raises(self):
         """Chromosome smaller than chunk_size must raise a clear ValueError."""
         model = IdentityUNet(output_stride=16)
-        signal = self._make_signal(2000)   # < chunk_size=4096
+        signal = self._make_signal(2000)  # < chunk_size=4096
         with pytest.raises(ValueError, match="chunk_size"):
-            predict_chromosome(model, signal, chunk_size=4096, overlap=512,
-                               output_stride=16, batch_size=1, device="cpu")
+            predict_chromosome(
+                model,
+                signal,
+                chunk_size=4096,
+                overlap=512,
+                output_stride=16,
+                batch_size=1,
+                device="cpu",
+            )
 
     def test_overlap_not_divisible_raises(self):
         model = IdentityUNet(output_stride=16)
         signal = self._make_signal(4096)
         with pytest.raises(ValueError, match="overlap"):
-            predict_chromosome(model, signal, chunk_size=4096, overlap=513,
-                                output_stride=16, device="cpu")
+            predict_chromosome(
+                model,
+                signal,
+                chunk_size=4096,
+                overlap=513,
+                output_stride=16,
+                device="cpu",
+            )
 
     def test_output_stride_1_backward_compat(self):
         """output_stride=1 restores old per-position behaviour."""
         model = IdentityUNet(output_stride=1)
         total = 8192
         signal = self._make_signal(total)
-        out = predict_chromosome(model, signal, chunk_size=4096, overlap=512,
-                                  output_stride=1, batch_size=2, device="cpu")
+        out = predict_chromosome(
+            model,
+            signal,
+            chunk_size=4096,
+            overlap=512,
+            output_stride=1,
+            batch_size=2,
+            device="cpu",
+        )
         assert out.shape == (1, total)

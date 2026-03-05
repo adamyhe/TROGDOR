@@ -19,11 +19,10 @@ import argparse
 import sys
 
 import numpy as np
+import pandas as pd
 import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
-
-import pandas as pd
 
 
 def parse_args():

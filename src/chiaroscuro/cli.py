@@ -172,7 +172,9 @@ def cli():
 
         chrom_sizes = dict(pl_bw.chroms())
 
-        chroms_to_score = args.chroms if args.chroms is not None else list(chrom_sizes.keys())
+        chroms_to_score = (
+            args.chroms if args.chroms is not None else list(chrom_sizes.keys())
+        )
 
         # Build output bigWig header
         out_header = [(c, chrom_sizes[c]) for c in chroms_to_score if c in chrom_sizes]
@@ -202,9 +204,11 @@ def cli():
             pl_vals = np.nan_to_num(
                 np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
             )
-            mn_vals = np.abs(np.nan_to_num(
-                np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-            ))
+            mn_vals = np.abs(
+                np.nan_to_num(
+                    np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+                )
+            )
 
             signal = torch.from_numpy(np.stack([pl_vals, mn_vals])).float()
 
@@ -218,7 +222,9 @@ def cli():
                 transform=normalization,
             )
 
-            probs = torch.sigmoid(logits).squeeze(0).numpy()  # (chrom_len // output_stride,)
+            probs = (
+                torch.sigmoid(logits).squeeze(0).numpy()
+            )  # (chrom_len // output_stride,)
 
             # Write non-zero values as intervals; each bin i maps to [i*output_stride, (i+1)*output_stride)
             bin_indices = np.where(probs > 0)[0]

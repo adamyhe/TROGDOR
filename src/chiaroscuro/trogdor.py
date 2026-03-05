@@ -338,7 +338,9 @@ class TROGDOR(torch.nn.Module):
         # BCE loss module (used when loss_type="bce" or "bce+tversky")
         if loss_type in ("bce", "bce+tversky"):
             if pos_weight is not None:
-                self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
+                self.loss = BCEWithLogitsLoss(
+                    reduction="none", pos_weight=self._pos_weight
+                )
             else:
                 self.loss = BCEWithLogitsLoss(reduction="none")
 
@@ -451,15 +453,25 @@ class TROGDOR(torch.nn.Module):
                     if self._loss_type == "bce":
                         loss = self.loss(logits, y).mean()
                     elif self._loss_type == "focal":
-                        loss = focal_loss(logits, y, self._focal_alpha, self._focal_gamma)
+                        loss = focal_loss(
+                            logits, y, self._focal_alpha, self._focal_gamma
+                        )
                     elif self._loss_type == "tversky":
-                        loss = tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta)
+                        loss = tversky_loss(
+                            logits, y, self._tversky_alpha, self._tversky_beta
+                        )
                     elif self._loss_type == "focal+tversky":
-                        loss = (focal_loss(logits, y, self._focal_alpha, self._focal_gamma)
-                                + self._tversky_lambda * tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta))
+                        loss = focal_loss(
+                            logits, y, self._focal_alpha, self._focal_gamma
+                        ) + self._tversky_lambda * tversky_loss(
+                            logits, y, self._tversky_alpha, self._tversky_beta
+                        )
                     elif self._loss_type == "bce+tversky":
-                        loss = (self.loss(logits, y).mean()
-                                + self._tversky_lambda * tversky_loss(logits, y, self._tversky_alpha, self._tversky_beta))
+                        loss = self.loss(
+                            logits, y
+                        ).mean() + self._tversky_lambda * tversky_loss(
+                            logits, y, self._tversky_alpha, self._tversky_beta
+                        )
 
                 loss.backward()
                 optimizer.step()

@@ -7,19 +7,18 @@ import torch
 
 from chiaroscuro.trogdor import (
     TROGDOR,
-    Conv1DBlock,
+    DecoderBlock,
     DoubleConv1D,
     EncoderBlock,
-    DecoderBlock,
     focal_loss,
     normalization,
     tversky_loss,
 )
 
-
 # ---------------------------------------------------------------------------
 # normalization
 # ---------------------------------------------------------------------------
+
 
 class TestNormalization:
     def test_output_range(self):
@@ -69,6 +68,7 @@ class TestNormalization:
 # DoubleConv1D
 # ---------------------------------------------------------------------------
 
+
 class TestDoubleConv1D:
     def test_forward_shape(self):
         m = DoubleConv1D(8, 16, kernel_size=3)
@@ -97,6 +97,7 @@ class TestDoubleConv1D:
 # EncoderBlock
 # ---------------------------------------------------------------------------
 
+
 class TestEncoderBlock:
     def test_forward_shapes(self):
         m = EncoderBlock(8, 16, kernel_size=3)
@@ -117,10 +118,11 @@ class TestEncoderBlock:
 # DecoderBlock
 # ---------------------------------------------------------------------------
 
+
 class TestDecoderBlock:
     def test_forward_shape(self):
         m = DecoderBlock(in_channels=16, skip_channels=8, out_channels=8)
-        x = torch.randn(2, 16, 32)   # upsampled from L//2
+        x = torch.randn(2, 16, 32)  # upsampled from L//2
         skip = torch.randn(2, 8, 64)
         y = m(x, skip)
         assert y.shape == (2, 8, 64), f"Expected (2,8,64), got {y.shape}"
@@ -128,7 +130,7 @@ class TestDecoderBlock:
     def test_odd_length_handling(self):
         """Encoder may floor odd lengths; decoder must handle ±1 mismatch."""
         m = DecoderBlock(in_channels=16, skip_channels=8, out_channels=8)
-        x = torch.randn(1, 16, 32)   # would pair with skip of 64 or 65
+        x = torch.randn(1, 16, 32)  # would pair with skip of 64 or 65
         skip = torch.randn(1, 8, 65)
         y = m(x, skip)
         assert y.shape == (1, 8, 65)
@@ -136,7 +138,7 @@ class TestDecoderBlock:
     def test_pad_to_match_crops(self):
         """When upsampled tensor is 1 longer than skip, it should be cropped."""
         m = DecoderBlock(in_channels=8, skip_channels=4, out_channels=4)
-        x = torch.randn(1, 8, 33)   # 1 too long
+        x = torch.randn(1, 8, 33)  # 1 too long
         skip = torch.randn(1, 4, 32)
         y = m(x, skip)
         assert y.shape == (1, 4, 32)
@@ -146,12 +148,18 @@ class TestDecoderBlock:
 # TROGDOR end-to-end
 # ---------------------------------------------------------------------------
 
+
 class TestTROGDOR:
     @pytest.fixture
     def model(self):
         # Small model for fast tests: output_stride=4, context_depth=2
-        return TROGDOR(in_channels=2, base_channels=8, output_stride=4,
-                       context_depth=2, kernel_size=3)
+        return TROGDOR(
+            in_channels=2,
+            base_channels=8,
+            output_stride=4,
+            context_depth=2,
+            kernel_size=3,
+        )
 
     def test_output_shape_small(self, model):
         """Small model: (3, 2, 256) → (3, 1, 64) since 256 // 4 = 64."""
@@ -211,6 +219,7 @@ class TestTROGDOR:
     def test_outer_encoders_count(self, model):
         """outer_encoders has n_out = log2(output_stride) levels."""
         import math
+
         expected = int(math.log2(model.output_stride))
         assert len(model.outer_encoders) == expected
 
@@ -232,8 +241,9 @@ class TestTROGDOR:
 
     def test_channel_cap(self):
         """Channels must not exceed max_channels."""
-        m = TROGDOR(base_channels=32, output_stride=16, context_depth=4,
-                    max_channels=128)
+        m = TROGDOR(
+            base_channels=32, output_stride=16, context_depth=4, max_channels=128
+        )
         # Check that all inner encoder output channels are <= 128
         for enc in m.inner_encoders:
             out_ch = enc.conv.block[0].out_channels
@@ -244,12 +254,15 @@ class TestTROGDOR:
 # TROGDOR pos_weight
 # ---------------------------------------------------------------------------
 
+
 class TestTROGDORPosWeight:
     def test_pos_weight_increases_positive_loss(self):
-        model_flat = TROGDOR(base_channels=8, output_stride=4, context_depth=2,
-                             pos_weight=None)
-        model_weighted = TROGDOR(base_channels=8, output_stride=4, context_depth=2,
-                                 pos_weight=10.0)
+        model_flat = TROGDOR(
+            base_channels=8, output_stride=4, context_depth=2, pos_weight=None
+        )
+        model_weighted = TROGDOR(
+            base_channels=8, output_stride=4, context_depth=2, pos_weight=10.0
+        )
         L = 256
         logits = torch.zeros(1, 1, L // 4)  # 64 bins, all zero logit
         y = torch.zeros(1, 1, L // 4)
@@ -259,8 +272,9 @@ class TestTROGDORPosWeight:
         assert loss_weighted > loss_flat
 
     def test_pos_weight_none_unchanged(self):
-        model = TROGDOR(base_channels=8, output_stride=4, context_depth=2,
-                        pos_weight=None)
+        model = TROGDOR(
+            base_channels=8, output_stride=4, context_depth=2, pos_weight=None
+        )
         logits = torch.zeros(1, 1, 16)
         y = torch.zeros(1, 1, 16)
         loss = model.loss(logits, y).mean()
@@ -270,6 +284,7 @@ class TestTROGDORPosWeight:
 # ---------------------------------------------------------------------------
 # focal_loss
 # ---------------------------------------------------------------------------
+
 
 class TestFocalLoss:
     def test_output_is_scalar(self):
@@ -288,6 +303,7 @@ class TestFocalLoss:
     def test_focal_lower_than_bce_on_easy_negatives(self):
         """On confident correct negatives, focal loss should be lower than BCE."""
         import torch.nn.functional as F
+
         # Very negative logits → model is confident these are negatives, and they are
         logits = torch.full((1, 1, 100), -10.0)
         targets = torch.zeros(1, 1, 100)
@@ -297,10 +313,10 @@ class TestFocalLoss:
 
     def test_perfect_predictions_low_loss(self):
         """Very high logits for positives, very low for negatives → near-zero loss."""
-        logits = torch.cat([torch.full((1, 1, 10), 20.0),
-                            torch.full((1, 1, 90), -20.0)], dim=2)
-        targets = torch.cat([torch.ones(1, 1, 10),
-                             torch.zeros(1, 1, 90)], dim=2)
+        logits = torch.cat(
+            [torch.full((1, 1, 10), 20.0), torch.full((1, 1, 90), -20.0)], dim=2
+        )
+        targets = torch.cat([torch.ones(1, 1, 10), torch.zeros(1, 1, 90)], dim=2)
         loss = focal_loss(logits, targets)
         assert loss.item() < 0.01
 
@@ -308,6 +324,7 @@ class TestFocalLoss:
 # ---------------------------------------------------------------------------
 # tversky_loss
 # ---------------------------------------------------------------------------
+
 
 class TestTverskyLoss:
     def test_output_in_unit_interval(self):
@@ -325,8 +342,8 @@ class TestTverskyLoss:
 
     def test_all_wrong_near_one(self):
         """Predicting 1 for all negatives → high Tversky loss."""
-        logits = torch.full((1, 1, 50), 20.0)   # all predicted positive
-        targets = torch.zeros(1, 1, 50)          # all actually negative
+        logits = torch.full((1, 1, 50), 20.0)  # all predicted positive
+        targets = torch.zeros(1, 1, 50)  # all actually negative
         loss = tversky_loss(logits, targets)
         assert loss.item() > 0.5
 
@@ -335,12 +352,12 @@ class TestTverskyLoss:
         # Scenario A: one hard FN — model confidently predicts 0 for the one positive
         logits_fn = torch.full((1, 1, 10), -20.0)  # all very negative predictions
         targets_fn = torch.zeros(1, 1, 10)
-        targets_fn[0, 0, 0] = 1.0                  # one positive → completely missed
+        targets_fn[0, 0, 0] = 1.0  # one positive → completely missed
 
         # Scenario B: one hard FP — model confidently predicts 1 for one negative
         logits_fp = torch.full((1, 1, 10), -20.0)
-        logits_fp[0, 0, 0] = 20.0                  # one false alarm
-        targets_fp = torch.zeros(1, 1, 10)          # all negative
+        logits_fp[0, 0, 0] = 20.0  # one false alarm
+        targets_fp = torch.zeros(1, 1, 10)  # all negative
 
         loss_fn = tversky_loss(logits_fn, targets_fn, alpha=0.3, beta=0.7)
         loss_fp = tversky_loss(logits_fp, targets_fp, alpha=0.3, beta=0.7)
@@ -350,6 +367,7 @@ class TestTverskyLoss:
 # ---------------------------------------------------------------------------
 # TROGDOR with focal+tversky loss
 # ---------------------------------------------------------------------------
+
 
 class TestTROGDORFocalTversky:
     @pytest.fixture
@@ -379,10 +397,11 @@ class TestTROGDORFocalTversky:
         targets = torch.zeros(2, 1, 64)
         targets[0, 0, :2] = 1.0
         logits = model(x)
-        loss = (focal_loss(logits, targets, model._focal_alpha, model._focal_gamma)
-                + model._tversky_lambda * tversky_loss(logits, targets,
-                                                       model._tversky_alpha,
-                                                       model._tversky_beta))
+        loss = focal_loss(
+            logits, targets, model._focal_alpha, model._focal_gamma
+        ) + model._tversky_lambda * tversky_loss(
+            logits, targets, model._tversky_alpha, model._tversky_beta
+        )
         loss.backward()
         assert loss.item() >= 0.0
 
@@ -394,6 +413,7 @@ class TestTROGDORFocalTversky:
 # ---------------------------------------------------------------------------
 # TROGDOR with bce+tversky loss
 # ---------------------------------------------------------------------------
+
 
 class TestTROGDORBCETversky:
     @pytest.fixture
@@ -421,9 +441,10 @@ class TestTROGDORBCETversky:
         targets = torch.zeros(2, 1, 64)
         targets[0, 0, :2] = 1.0
         logits = model(x)
-        loss = (model.loss(logits, targets).mean()
-                + model._tversky_lambda * tversky_loss(logits, targets,
-                                                       model._tversky_alpha,
-                                                       model._tversky_beta))
+        loss = model.loss(
+            logits, targets
+        ).mean() + model._tversky_lambda * tversky_loss(
+            logits, targets, model._tversky_alpha, model._tversky_beta
+        )
         assert loss.shape == torch.Size([])
         assert loss.item() >= 0.0
