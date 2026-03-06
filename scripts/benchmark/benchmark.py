@@ -16,8 +16,9 @@ from torcheval.metrics.functional import binary_auprc, binary_auroc
 from tqdm import tqdm
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
+from chiaroscuro.data_transforms import normalization, standardization
 from chiaroscuro.predict import predict_chromosome
-from chiaroscuro.trogdor import TROGDOR, normalization, standardization
+from chiaroscuro.trogdor import TROGDOR
 
 
 def parse_args():

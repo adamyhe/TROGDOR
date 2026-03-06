@@ -2,217 +2,23 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-This module defines a neural network predicts TSS from nascent RNA
-sequencing data
+This module defines a neural network that predicts transcription initiation
+regions (TIRs) from nascent RNA sequencing data.
 """
 
-import importlib.resources
+import functools
 import math
 import time
 
-import numpy as np
 import torch
-import torch.nn.functional as F
-from torch.nn import BCEWithLogitsLoss
 from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
+from .losses import focal_tversky_loss
+from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
 from .predict import predict
 
 torch.backends.cudnn.benchmark = True
-
-
-def load_pretrained_model(name="TROGDOR_UNET.torch", model_params={}):
-    """
-    Small utility function to load a pre-trained TROGDOR model placed inside
-    of the deployed package.
-    """
-    model = TROGDOR(**model_params)
-    with importlib.resources.path("chiaroscuro", name) as path:
-        model.load_state_dict(torch.load(path, weights_only=True), strict=False)
-    return model
-
-
-def normalization(t, x=0.05, y=0.01, min_ref=20):
-    """
-    Normalize each strand of nascent RNA coverage to (0, 1) using a
-    per-strand logistic function, following Danko et al. 2015.
-
-    For each strand independently:
-      1. Compute ``ref`` as the 99th percentile of nonzero values,
-         clamped to at least ``min_ref``.
-      2. Set the inflection point ``beta = x * ref``.
-      3. Derive slope ``alpha`` so that the logistic equals ``y`` at zero
-         coverage: ``alpha = log(1/y - 1) / beta``.
-      4. Apply ``F(v) = 1 / (1 + exp(-alpha * (v - beta)))``.
-
-    Strands with no nonzero coverage are left as zeros.
-
-    Parameters
-    ----------
-    t : torch.Tensor, shape (C, L)
-        Stranded nascent RNA sequencing coverage; one row per strand.
-    x : float, default 0.05
-        Inflection point as a fraction of ``ref``; controls where the
-        logistic transitions from low to high.
-    y : float, default 0.01
-        Logistic value at zero coverage; sets the baseline suppression
-        of background signal.
-    min_ref : float, default 20
-        Minimum value for ``ref``, preventing extreme slopes on very
-        low-coverage strands.
-
-    Returns
-    -------
-    result : torch.Tensor, shape (C, L)
-        Coverage values mapped to (0, 1) per strand.
-    """
-    result = torch.zeros_like(t)
-    for i in range(t.shape[0]):
-        strand = t[i]
-        nonzero = strand[strand > 0]
-        if nonzero.numel() == 0:
-            continue
-        ref = (
-            torch.quantile(nonzero.float(), 0.99)
-            if nonzero.numel() >= 2
-            else nonzero.max()
-        )
-        ref = max(ref.item(), min_ref)
-        beta = x * ref
-        alpha = (1 / beta) * np.log(1 / y - 1)
-        result[i] = 1 / (1 + torch.exp(-alpha * (strand - beta)))
-    return result
-
-
-def standardization(t, x=0.05, y=0.01):
-    """Backwards-compatible alias for the original single-pass normalization.
-
-    .. deprecated::
-        Use :func:`normalization` instead. This function scales by the global
-        maximum of the whole tensor rather than per-strand 99th percentile,
-        making it sensitive to outlier spikes and treating both strands with
-        the same reference point.
-    """
-    if torch.max(t) == 0:
-        return torch.zeros_like(t)
-    beta = x * torch.max(t)
-    alpha = (1 / beta) * np.log(1 / y - 1)
-    return 1 / (1 + torch.exp(-alpha * (t - beta)))
-
-
-def focal_loss(logits, targets, alpha=0.999, gamma=2.0):
-    """Alpha-balanced focal loss (Lin et al. 2017).
-
-    Down-weights easy examples via (1 - p_t)^gamma, focusing training on
-    hard and uncertain bins. alpha weights the positive class.
-    """
-    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
-    p_t = torch.sigmoid(logits) * targets + (1 - torch.sigmoid(logits)) * (1 - targets)
-    alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-    return (alpha_t * (1 - p_t) ** gamma * bce).mean()
-
-
-def tversky_loss(logits, targets, alpha=0.3, beta=0.7, smooth=1.0):
-    """Tversky loss for imbalanced segmentation.
-
-    alpha weights FP, beta weights FN. beta > alpha penalises missed
-    positives more than false alarms, which is appropriate when
-    positives are rare and recall matters.
-    """
-    p = torch.sigmoid(logits)
-    tp = (p * targets).sum()
-    fp = (p * (1 - targets)).sum()
-    fn = ((1 - p) * targets).sum()
-    return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-
-
-class Conv1DBlock(torch.nn.Module):
-    """
-    A small class that applies the conv + reduction operation at the core of the
-    Inception module.
-    """
-
-    def __init__(self, in_channels, reduction_channels, out_channels, kernel_size):
-        super(Conv1DBlock, self).__init__()
-        self.reduce = torch.nn.Conv1d(in_channels, reduction_channels, kernel_size=1)
-        self.conv = torch.nn.Conv1d(
-            reduction_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-        )
-        self.bn = torch.nn.BatchNorm1d(out_channels)
-        self.relus = [torch.nn.ReLU(), torch.nn.ReLU()]
-
-    def forward(self, X):
-        return self.relus[1](self.bn(self.conv(self.relus[0](self.reduce(X)))))
-
-
-class DoubleConv1D(torch.nn.Module):
-    """Two rounds of Conv1d (same-pad) -> BN -> ReLU."""
-
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        super(DoubleConv1D, self).__init__()
-        if kernel_size % 2 == 0:
-            raise ValueError("kernel_size must be odd for same-padding.")
-        pad = kernel_size // 2
-        self.block = torch.nn.Sequential(
-            torch.nn.Conv1d(
-                in_channels, out_channels, kernel_size=kernel_size, padding=pad
-            ),
-            torch.nn.BatchNorm1d(out_channels),
-            torch.nn.ReLU(),
-            torch.nn.Conv1d(
-                out_channels, out_channels, kernel_size=kernel_size, padding=pad
-            ),
-            torch.nn.BatchNorm1d(out_channels),
-            torch.nn.ReLU(),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-
-class EncoderBlock(torch.nn.Module):
-    """DoubleConv1D then MaxPool1d(2). Returns (skip, pooled)."""
-
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        super(EncoderBlock, self).__init__()
-        self.conv = DoubleConv1D(in_channels, out_channels, kernel_size)
-        self.pool = torch.nn.MaxPool1d(2)
-
-    def forward(self, x):
-        skip = self.conv(x)
-        pooled = self.pool(skip)
-        return skip, pooled
-
-
-class DecoderBlock(torch.nn.Module):
-    """Upsample via ConvTranspose1d, concat skip, then DoubleConv1D."""
-
-    def __init__(self, in_channels, skip_channels, out_channels, kernel_size=3):
-        super(DecoderBlock, self).__init__()
-        self.up = torch.nn.ConvTranspose1d(
-            in_channels, in_channels, kernel_size=2, stride=2
-        )
-        self.conv = DoubleConv1D(in_channels + skip_channels, out_channels, kernel_size)
-
-    @staticmethod
-    def _pad_to_match(x, skip):
-        """Right-pad or right-crop x by ≤1 to match skip's length."""
-        diff = skip.shape[2] - x.shape[2]
-        if diff > 0:
-            x = torch.nn.functional.pad(x, (0, diff))
-        elif diff < 0:
-            x = x[:, :, : skip.shape[2]]
-        return x
-
-    def forward(self, x, skip):
-        x = self.up(x)
-        x = self._pad_to_match(x, skip)
-        x = torch.cat([x, skip], dim=1)
-        return self.conv(x)
 
 
 class TROGDOR(torch.nn.Module):
@@ -249,6 +55,13 @@ class TROGDOR(torch.nn.Module):
         Prefix for saved model and log files. Default is "TROGDOR".
     verbose : bool, optional
         Whether to print training statistics. Default is True.
+    loss_fn : callable, optional
+        Loss function with signature ``(logits, targets) -> scalar``.
+        Stored as ``self._loss_fn`` (wrapped with ``functools.partial`` if
+        ``loss_kwargs`` is provided). Default is :func:`focal_tversky_loss`.
+    loss_kwargs : dict or None, optional
+        Keyword arguments forwarded to ``loss_fn`` via ``functools.partial``.
+        Default is None.
     """
 
     def __init__(
@@ -261,13 +74,8 @@ class TROGDOR(torch.nn.Module):
         kernel_size=3,
         name="TROGDOR",
         verbose=True,
-        pos_weight=None,
-        loss_type="bce",
-        focal_alpha=0.999,
-        focal_gamma=2.0,
-        tversky_alpha=0.3,
-        tversky_beta=0.7,
-        tversky_lambda=1.0,
+        loss_fn=focal_tversky_loss,
+        loss_kwargs=None,
     ):
         super(TROGDOR, self).__init__()
         self.name = name
@@ -324,25 +132,8 @@ class TROGDOR(torch.nn.Module):
         # Output head
         self.head = torch.nn.Conv1d(ch, 1, kernel_size=1)
 
-        self._loss_type = loss_type
-        self._focal_alpha = focal_alpha
-        self._focal_gamma = focal_gamma
-        self._tversky_alpha = tversky_alpha
-        self._tversky_beta = tversky_beta
-        self._tversky_lambda = tversky_lambda
-
-        if pos_weight is not None:
-            self.register_buffer("_pos_weight", torch.tensor([pos_weight]))
-        else:
-            self._pos_weight = None
-        # BCE loss module (used when loss_type="bce" or "bce+tversky")
-        if loss_type in ("bce", "bce+tversky"):
-            if pos_weight is not None:
-                self.loss = BCEWithLogitsLoss(
-                    reduction="none", pos_weight=self._pos_weight
-                )
-            else:
-                self.loss = BCEWithLogitsLoss(reduction="none")
+        _kw = loss_kwargs or {}
+        self._loss_fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
 
         self.logger = Logger(
             [
@@ -350,8 +141,8 @@ class TROGDOR(torch.nn.Module):
                 "Iteration",
                 "Train_Time",
                 "Val_Time",
-                "Train_BCE",
-                "Val_BCE",
+                "Train_Loss",
+                "Val_Loss",
                 "Val_AUPRC",
                 "Val_Dice",
                 "Saved?",
@@ -364,7 +155,9 @@ class TROGDOR(torch.nn.Module):
         Parameters
         ----------
         X : torch.Tensor, shape=(B, 2, L)
-            Stranded nascent RNA sequencing data, logistically standardized.
+            Stranded nascent RNA sequencing data. These
+            data should be normalized using
+            `chiaroscuro.data_transforms.normalization`.
 
         Returns
         -------
@@ -400,6 +193,8 @@ class TROGDOR(torch.nn.Module):
         wandb_run=None,
         bf16=True,
         scheduler=None,
+        loss_fn=None,
+        loss_kwargs=None,
     ):
         """
         Fit the model to data and validate it periodically.
@@ -430,11 +225,24 @@ class TROGDOR(torch.nn.Module):
             Learning rate scheduler stepped once per batch after each
             ``optimizer.step()``. Pass any PyTorch scheduler; ``None`` keeps
             the optimizer's LR fixed. Default is None.
+        loss_fn : callable or None, optional
+            Override the instance-level ``self._loss_fn`` for this training
+            run. Same signature as the constructor's ``loss_fn``. Default is
+            None (use ``self._loss_fn``).
+        loss_kwargs : dict or None, optional
+            Keyword arguments forwarded to ``loss_fn`` via
+            ``functools.partial``. Ignored when ``loss_fn`` is None.
+            Default is None.
         """
         iteration = 0
         early_stop_count = 0
         best_auprc = 0.0
         self.logger.start()
+
+        _fn = self._loss_fn
+        if loss_fn is not None:
+            _kw = loss_kwargs or {}
+            _fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
 
         for epoch in range(max_epochs):
             tic = time.time()
@@ -450,28 +258,7 @@ class TROGDOR(torch.nn.Module):
 
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
                     logits = self(X)
-                    if self._loss_type == "bce":
-                        loss = self.loss(logits, y).mean()
-                    elif self._loss_type == "focal":
-                        loss = focal_loss(
-                            logits, y, self._focal_alpha, self._focal_gamma
-                        )
-                    elif self._loss_type == "tversky":
-                        loss = tversky_loss(
-                            logits, y, self._tversky_alpha, self._tversky_beta
-                        )
-                    elif self._loss_type == "focal+tversky":
-                        loss = focal_loss(
-                            logits, y, self._focal_alpha, self._focal_gamma
-                        ) + self._tversky_lambda * tversky_loss(
-                            logits, y, self._tversky_alpha, self._tversky_beta
-                        )
-                    elif self._loss_type == "bce+tversky":
-                        loss = self.loss(
-                            logits, y
-                        ).mean() + self._tversky_lambda * tversky_loss(
-                            logits, y, self._tversky_alpha, self._tversky_beta
-                        )
+                    loss = _fn(logits, y)
 
                 loss.backward()
                 optimizer.step()
@@ -482,7 +269,7 @@ class TROGDOR(torch.nn.Module):
                 if wandb_run is not None:
                     wandb_run.log(
                         {
-                            "train/bce": loss.item(),
+                            "train/loss": loss.item(),
                             "train/lr": optimizer.param_groups[0]["lr"],
                         },
                         step=iteration,
@@ -516,12 +303,7 @@ class TROGDOR(torch.nn.Module):
                     y_val = torch.cat(y_val)
                     logits_val = torch.cat(logits_val)
 
-                    pos_weight = (
-                        self._pos_weight.cpu() if self._pos_weight is not None else None
-                    )
-                    val_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                        logits_val, y_val, pos_weight=pos_weight, reduction="none"
-                    )
+                    val_loss_ = _fn(logits_val, y_val).item()
 
                     logits_flat = torch.sigmoid(logits_val.reshape(-1))
                     y_flat = y_val.reshape(-1).long()
@@ -533,7 +315,6 @@ class TROGDOR(torch.nn.Module):
                     val_dice = (2 * tp) / (preds_flat.sum() + y_flat_f.sum() + 1e-8)
 
                     val_time = time.time() - tic
-                    val_loss_ = val_loss.mean().item()
 
                     self.logger.add(
                         [
@@ -553,7 +334,7 @@ class TROGDOR(torch.nn.Module):
                     if wandb_run is not None:
                         wandb_run.log(
                             {
-                                "val/bce": val_loss_,
+                                "val/loss": val_loss_,
                                 "val/auprc": val_auprc.item(),
                                 "val/dice": val_dice.item(),
                             },

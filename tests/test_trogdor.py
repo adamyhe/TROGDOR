@@ -2,18 +2,16 @@
 Tests for the TROGDOR asymmetric 1D U-Net model (trogdor.py).
 """
 
+import functools
+
 import pytest
 import torch
+from torch.nn import BCEWithLogitsLoss
 
-from chiaroscuro.trogdor import (
-    TROGDOR,
-    DecoderBlock,
-    DoubleConv1D,
-    EncoderBlock,
-    focal_loss,
-    normalization,
-    tversky_loss,
-)
+from chiaroscuro.data_transforms import normalization
+from chiaroscuro.losses import focal_loss, focal_tversky_loss, tversky_loss
+from chiaroscuro.modules import DecoderBlock, DoubleConv1D, EncoderBlock
+from chiaroscuro.trogdor import TROGDOR
 
 # ---------------------------------------------------------------------------
 # normalization
@@ -251,37 +249,6 @@ class TestTROGDOR:
 
 
 # ---------------------------------------------------------------------------
-# TROGDOR pos_weight
-# ---------------------------------------------------------------------------
-
-
-class TestTROGDORPosWeight:
-    def test_pos_weight_increases_positive_loss(self):
-        model_flat = TROGDOR(
-            base_channels=8, output_stride=4, context_depth=2, pos_weight=None
-        )
-        model_weighted = TROGDOR(
-            base_channels=8, output_stride=4, context_depth=2, pos_weight=10.0
-        )
-        L = 256
-        logits = torch.zeros(1, 1, L // 4)  # 64 bins, all zero logit
-        y = torch.zeros(1, 1, L // 4)
-        y[0, 0, 0] = 1.0  # first bin is positive
-        loss_flat = model_flat.loss(logits, y).mean()
-        loss_weighted = model_weighted.loss(logits, y).mean()
-        assert loss_weighted > loss_flat
-
-    def test_pos_weight_none_unchanged(self):
-        model = TROGDOR(
-            base_channels=8, output_stride=4, context_depth=2, pos_weight=None
-        )
-        logits = torch.zeros(1, 1, 16)
-        y = torch.zeros(1, 1, 16)
-        loss = model.loss(logits, y).mean()
-        assert loss.item() > 0  # standard BCE on zero logit is ln(2) ≈ 0.693
-
-
-# ---------------------------------------------------------------------------
 # focal_loss
 # ---------------------------------------------------------------------------
 
@@ -372,18 +339,15 @@ class TestTverskyLoss:
 class TestTROGDORFocalTversky:
     @pytest.fixture
     def model(self):
+        _fl = functools.partial(focal_loss, alpha=0.999, gamma=2.0)
+        _tl = functools.partial(tversky_loss, alpha=0.3, beta=0.7)
         return TROGDOR(
             in_channels=2,
             base_channels=8,
             output_stride=4,
             context_depth=2,
             kernel_size=3,
-            loss_type="focal+tversky",
-            focal_alpha=0.999,
-            focal_gamma=2.0,
-            tversky_alpha=0.3,
-            tversky_beta=0.7,
-            tversky_lambda=1.0,
+            loss_fn=lambda logits, y: _fl(logits, y) + _tl(logits, y),
         )
 
     def test_forward_runs(self, model):
@@ -397,17 +361,10 @@ class TestTROGDORFocalTversky:
         targets = torch.zeros(2, 1, 64)
         targets[0, 0, :2] = 1.0
         logits = model(x)
-        loss = focal_loss(
-            logits, targets, model._focal_alpha, model._focal_gamma
-        ) + model._tversky_lambda * tversky_loss(
-            logits, targets, model._tversky_alpha, model._tversky_beta
-        )
+        loss = model._loss_fn(logits, targets)
         loss.backward()
         assert loss.item() >= 0.0
 
-    def test_no_loss_attribute_for_non_bce(self, model):
-        """focal+tversky model should not expose a .loss nn.Module."""
-        assert not hasattr(model, "loss")
 
 
 # ---------------------------------------------------------------------------
@@ -418,22 +375,16 @@ class TestTROGDORFocalTversky:
 class TestTROGDORBCETversky:
     @pytest.fixture
     def model(self):
+        _bce = BCEWithLogitsLoss(reduction="none", pos_weight=torch.tensor([10.0]))
+        _tl = functools.partial(tversky_loss, alpha=0.3, beta=0.7)
         return TROGDOR(
             in_channels=2,
             base_channels=8,
             output_stride=4,
             context_depth=2,
             kernel_size=3,
-            loss_type="bce+tversky",
-            pos_weight=10.0,
-            tversky_alpha=0.3,
-            tversky_beta=0.7,
-            tversky_lambda=1.0,
+            loss_fn=lambda logits, y: _bce(logits, y).mean() + _tl(logits, y),
         )
-
-    def test_loss_attribute_exists(self, model):
-        """bce+tversky model must expose a .loss BCE module."""
-        assert hasattr(model, "loss")
 
     def test_loss_step_nonnegative(self, model):
         """Forward + compound loss should be a non-negative scalar."""
@@ -441,10 +392,81 @@ class TestTROGDORBCETversky:
         targets = torch.zeros(2, 1, 64)
         targets[0, 0, :2] = 1.0
         logits = model(x)
-        loss = model.loss(
-            logits, targets
-        ).mean() + model._tversky_lambda * tversky_loss(
-            logits, targets, model._tversky_alpha, model._tversky_beta
-        )
+        loss = model._loss_fn(logits, targets)
         assert loss.shape == torch.Size([])
+        assert loss.item() >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# focal_tversky_loss
+# ---------------------------------------------------------------------------
+
+
+class TestFocalTverskyLoss:
+    def test_output_in_unit_interval(self):
+        logits = torch.randn(2, 1, 64)
+        targets = (torch.rand(2, 1, 64) > 0.9).float()
+        loss = focal_tversky_loss(logits, targets)
+        assert 0.0 <= loss.item() <= 1.0 + 1e-6
+
+    def test_perfect_predictions_near_zero(self):
+        """Very high positive logits for all-positive targets → FTL < 0.01."""
+        logits = torch.full((1, 1, 50), 20.0)
+        targets = torch.ones(1, 1, 50)
+        loss = focal_tversky_loss(logits, targets)
+        assert loss.item() < 0.01
+
+    def test_all_wrong_near_one(self):
+        """Predicting all positive for all-negative targets → FTL > 0.5."""
+        logits = torch.full((1, 1, 50), 20.0)
+        targets = torch.zeros(1, 1, 50)
+        loss = focal_tversky_loss(logits, targets)
+        assert loss.item() > 0.5
+
+    def test_gamma_1_equals_tversky(self):
+        """gamma=1 → FTL == tversky_loss exactly (1/1 = 1 power)."""
+        logits = torch.randn(2, 1, 64)
+        targets = (torch.rand(2, 1, 64) > 0.9).float()
+        ftl = focal_tversky_loss(logits, targets, gamma=1.0)
+        tl = tversky_loss(logits, targets)
+        assert abs(ftl.item() - tl.item()) < 1e-6
+
+    def test_larger_gamma_raises_loss(self):
+        """gamma=3 → FTL > tversky_loss for imperfect predictions (x^(1/3) > x for x in (0,1))."""
+        logits = torch.randn(2, 1, 64)
+        targets = (torch.rand(2, 1, 64) > 0.9).float()
+        ftl = focal_tversky_loss(logits, targets, gamma=3.0)
+        tl = tversky_loss(logits, targets)
+        assert ftl.item() > tl.item()
+
+
+# ---------------------------------------------------------------------------
+# TROGDOR with focal_tversky loss
+# ---------------------------------------------------------------------------
+
+
+class TestTROGDORFocalTverskyLoss:
+    @pytest.fixture
+    def model(self):
+        return TROGDOR(
+            base_channels=8,
+            output_stride=4,
+            context_depth=2,
+            loss_fn=focal_tversky_loss,
+            loss_kwargs={"alpha": 0.3, "beta": 0.7, "gamma": 4/3},
+        )
+
+    def test_forward_runs(self, model):
+        x = torch.randn(2, 2, 256)
+        y = model(x)
+        assert y.shape == (2, 1, 64)
+
+    def test_loss_step_runs(self, model):
+        """Forward + focal_tversky_loss + backward completes without error."""
+        x = torch.randn(2, 2, 256)
+        targets = torch.zeros(2, 1, 64)
+        targets[0, 0, :2] = 1.0
+        logits = model(x)
+        loss = model._loss_fn(logits, targets)
+        loss.backward()
         assert loss.item() >= 0.0

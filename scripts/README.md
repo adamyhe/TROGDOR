@@ -46,6 +46,34 @@ validation BCE. Early stopping is applied after 5 epochs without improvement.
 The LR schedule is linear warmup (500 steps, 1e-8 → 1e-3) followed by
 cosine annealing to near zero over the remaining steps.
 
+### Loss function
+
+The default loss is `focal_tversky_loss` from `chiaroscuro.losses`. Available built-in losses:
+
+| Function | Description |
+|----------|-------------|
+| `focal_tversky_loss` (default) | Focal Tversky loss (Abraham & Khan 2019); raises Tversky index to power `1/γ`, emphasising hard missed regions; `α`/`β` control FP/FN weighting. |
+| `tversky_loss` | Plain Tversky index loss without focal re-weighting. |
+| `focal_loss` | Alpha-balanced focal loss (Lin et al. 2017); down-weights easy negatives via `(1−p)^γ`. |
+
+To override, pass a callable to `loss_fn=` in the `TROGDOR(...)` constructor. For example, we can construct a combined focal + tversky loss function via:
+
+```python
+from chiaroscuro.losses import focal_loss, tversky_loss
+from chiaroscuro.trogdor import TROGDOR
+
+model = TROGDOR(
+    loss_fn=lambda logits, y: focal_loss(logits, y) + 0.5 * tversky_loss(logits, y)
+)
+```
+
+To tune `α`/`β`/`γ` without writing a wrapper, use `loss_kwargs=`; the training
+loop threads these into the loss fn via `functools.partial`:
+
+```python
+model = TROGDOR(loss_kwargs={"alpha": 0.3, "beta": 0.7, "gamma": 2.0})
+```
+
 ### LR search
 
 To find the best peak learning rate before a full training run:
@@ -67,8 +95,8 @@ pip install -e ".[dev]"
 wandb login
 ```
 
-Metrics logged per batch: `train/bce`, `train/lr`.
-Metrics logged per epoch: `val/bce`, `val/auprc`, `val/dice`.
+Metrics logged per batch: `train/loss`, `train/lr`.
+Metrics logged per epoch: `val/loss`, `val/auprc`, `val/dice`.
 
 ## 3. Benchmark
 
@@ -93,7 +121,7 @@ python scripts/benchmark/benchmark.py \
 | `-d/--device` | Device (default: `cuda`) |
 | `--output_stride` | Bin size in bp (default: `16`) |
 | `--chroms` | Chromosome whitelist (default: all) |
-| `-v/--verbose` | Print per-chromosome progress |
+| `-v/--verbose` | Show per-chunk tqdm progress bar for each chromosome |
 
 Expected output on K562 data: AUROC > 0.9, AUPRC meaningfully above the positive rate (~1%).
 

@@ -20,15 +20,40 @@ import numpy as np
 import pybigtools
 import torch
 
+from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_chromosome
-from chiaroscuro.trogdor import load_pretrained_model, normalization
+from chiaroscuro.trogdor import TROGDOR
 
 _help = """
 The following commands are available:
-    pipeline  Run the full TROGDOR pipeline from raw data to peak calls
-    score     Score positions using a pre-trained TROGDOR model
-    call      Call peaks from scored positions
+    pipeline / burninate  Run the full TROGDOR pipeline from raw data to peak calls
+    score                 Score positions using a pre-trained TROGDOR model
+    call                  Call peaks from scored positions
 """
+
+
+def _bh_threshold(probs, alpha):
+    m = len(probs)
+    if m == 0:
+        return None
+    p = 1.0 - np.asarray(probs, dtype=np.float64)
+    sorted_p = np.sort(p)
+    passing = np.where(sorted_p <= (np.arange(1, m + 1) / m) * alpha)[0]
+    if len(passing) == 0:
+        return None
+    return float(1.0 - sorted_p[passing[-1]])
+
+
+def _merge_intervals(intervals):
+    if not intervals:
+        return []
+    merged = [intervals[0]]
+    for s, e in intervals[1:]:
+        if s == merged[-1][1]:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    return merged
 
 
 def cli():
@@ -41,9 +66,10 @@ def cli():
 
     # =============================================================================
 
-    # pipeline
+    # pipeline (alias: burninate)
     parser_pipeline = subparsers.add_parser(
-        "pipeline", help="Run the full TROGDOR pipeline from raw data to peak calls"
+        "pipeline", aliases=["burninate"],
+        help="Run the full TROGDOR pipeline from raw data to peak calls"
     )
     parser_pipeline.add_argument(
         "-p",
@@ -79,12 +105,11 @@ def cli():
         "score", help="Score positions using a pre-trained TROGDOR model"
     )
     parser_score.add_argument(
-        "-i",
-        "--input",
-        required=False,
-        default=None,
+        "-M",
+        "--model",
+        required=True,
         type=str,
-        help="Input BED file of genomic positions (optional; ignored for dense scoring)",
+        help="Path to a TROGDOR model state dict (.torch)",
     )
     parser_score.add_argument(
         "-p",
@@ -164,7 +189,10 @@ def cli():
 
     # Run provided command
     if args.cmd == "score":
-        model = load_pretrained_model()
+        model = TROGDOR()
+        model.load_state_dict(
+            torch.load(args.model, weights_only=True, map_location="cpu"), strict=False
+        )
         model = model.to(args.device).eval()
 
         pl_bw = pybigtools.open(args.pl_bigwig)
@@ -239,9 +267,43 @@ def cli():
         out_bw.close()
 
     elif args.cmd == "peaks":
-        pass
+        in_bw = pybigtools.open(args.input)
+        chrom_sizes = dict(in_bw.chroms())
 
-    elif args.cmd == "pipeline":
+        # Pass 1: collect all intervals per chrom and aggregate probs for BH
+        chrom_intervals = {}
+        all_probs = []
+        for chrom, chrom_len in chrom_sizes.items():
+            ivals = [
+                (s, e, v)
+                for s, e, v in in_bw.intervals(chrom, 0, chrom_len)
+                if not np.isnan(v)
+            ]
+            chrom_intervals[chrom] = ivals
+            all_probs.extend(v for _, _, v in ivals)
+        in_bw.close()
+
+        threshold = _bh_threshold(np.array(all_probs, dtype=np.float64), args.fdr_threshold)
+
+        if args.verbose:
+            if threshold is None:
+                print("No bins pass BH FDR threshold; writing empty BED file")
+            else:
+                n_pass = sum(1 for p in all_probs if p >= threshold)
+                print(f"BH probability threshold: {threshold:.6f} ({n_pass} bins pass)")
+
+        with open(args.output, "w") as out_bed:
+            if threshold is not None:
+                for chrom in sorted(chrom_sizes):
+                    passing = [
+                        (s, e)
+                        for s, e, v in chrom_intervals[chrom]
+                        if v >= threshold
+                    ]
+                    for start, end in _merge_intervals(passing):
+                        out_bed.write(f"{chrom}\t{start}\t{end}\n")
+
+    elif args.cmd in ("pipeline", "burninate"):
         pass
 
     else:

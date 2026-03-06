@@ -1,7 +1,8 @@
 from importlib.metadata import PackageNotFoundError, version
 
+from .data_transforms import normalization, standardization
 from .predict import predict, predict_chromosome
-from .trogdor import TROGDOR, load_pretrained_model, normalization, standardization
+from .trogdor import TROGDOR
 
 try:
     __version__ = version("trogdor")

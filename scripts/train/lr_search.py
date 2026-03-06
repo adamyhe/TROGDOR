@@ -12,7 +12,8 @@ from torcheval.metrics.functional import binary_auprc
 
 from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
 from chiaroscuro.predict import predict
-from chiaroscuro.trogdor import TROGDOR, normalization
+from chiaroscuro.data_transforms import normalization
+from chiaroscuro.trogdor import TROGDOR
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 

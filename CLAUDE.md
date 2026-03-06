@@ -16,14 +16,14 @@ The package installs four CLI aliases that all invoke the same entry point: `TRO
 
 ## CLI Pipeline
 
-The tool operates in two steps (`pipeline` is a planned wrapper for both):
+The tool operates in two steps (`pipeline`/`burninate` is a planned wrapper for both):
 
 1. **score** – Score the whole genome using the pre-trained model; outputs a bigWig of probabilities
 2. **peaks** – Call peaks from the scored bigWig using BH FDR correction
 
 Example:
 ```bash
-trogdor score -p plus.bw -m minus.bw -o scores.bw -d cuda
+trogdor score -M model.torch -p plus.bw -m minus.bw -o scores.bw -d cuda
 trogdor peaks -t scores.bw -o peaks.bed --fdr_threshold 0.05
 ```
 
@@ -34,7 +34,10 @@ Short contigs shorter than `--chunk_size` (default 262144) are automatically ski
 ### Package layout
 
 - `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
-- `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class), `normalization()`, `standardization()` (deprecated), `load_pretrained_model()`
+- `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
+- `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
+- `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
+- `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
 - `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2) and `predict_chromosome()` (sliding-window chromosome scoring)
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
@@ -54,17 +57,12 @@ Input: `(batch, 2, length)` tensor of logistically-normalized stranded nascent R
 
 Output: `(batch, 1, length // output_stride)` logits. Loss: BCEWithLogitsLoss. Metrics: AUROC, AUPRC, Dice.
 
-### Pre-trained model
-
-Bundled as `src/chiaroscuro/TROGDOR_UNET.torch` (loaded via `importlib.resources`). `load_pretrained_model()` in `trogdor.py` handles loading (`strict=False` to ignore training-only keys).
-
 ### Data normalization
 
-Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normalization()` in `trogdor.py`) before passing to the model, following Danko et al. 2015. The reference point is the 99th percentile of nonzero values, clamped to `min_ref=20` to prevent noise amplification on sparse strands.
+Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normalization()` in `data_transforms.py`) before passing to the model, following Danko et al. 2015. The reference point is the 99th percentile of nonzero values, clamped to `min_ref=20` to prevent noise amplification on sparse strands.
 
 `standardization()` is a deprecated alias for the original global-max-based version.
 
 ## Known Issues / In-Progress
 
-- The `peaks` and `pipeline` subcommands are not yet implemented (they `pass`).
-- `NascentDataset` in `dataset.py` has stub `_load_chrom` and `__getitem__` methods.
+- The `peaks` and `pipeline`/`burninate` subcommands are not yet implemented (they `pass`).
