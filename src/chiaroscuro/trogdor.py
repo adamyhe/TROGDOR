@@ -3,7 +3,8 @@
 
 """
 This module defines a neural network that predicts transcription initiation
-regions (TIRs) from nascent RNA sequencing data.
+regions (TIRs) from nascent RNA sequencing data. This task is framed as an
+image segmentation problem and uses a 1-D U-Net architecture.
 """
 
 import functools

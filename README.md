@@ -22,8 +22,8 @@ Input: stranded bigWig files. Output: BED file of called TIR peaks.
 `scores.bw` is an intermediate bigWig of per-bin predicted probabilities at
 `--output_stride` bp resolution (default: 16 bp).
 
-> **Note**: `peaks` is not yet implemented. The `pipeline` subcommand (a planned
-> wrapper for both steps) is also not yet implemented.
+> **Note**: `peaks` is not yet implemented. The `pipeline` subcommand (alias: `burninate`),
+> a planned wrapper for both steps, is also not yet implemented.
 
 ## Installation
 

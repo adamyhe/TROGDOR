@@ -20,23 +20,27 @@ from chiaroscuro.trogdor import TROGDOR
 
 class TestNormalization:
     def test_output_range(self):
+        """All output values must lie in [0, 1]."""
         t = torch.rand(2, 1000) * 100
         out = normalization(t)
         assert out.min() >= 0.0
         assert out.max() <= 1.0
 
     def test_shape_preserved(self):
+        """Output tensor must have the same shape as the input."""
         t = torch.rand(2, 500)
         out = normalization(t)
         assert out.shape == t.shape
 
     def test_all_zeros(self):
+        """All-zero input (no coverage) must produce an all-zero output."""
         t = torch.zeros(2, 100)
         out = normalization(t)
         assert out.shape == t.shape
         assert torch.all(out == 0.0)
 
     def test_per_strand_independence(self):
+        """A spike on strand 0 must not suppress the moderate values on strand 1."""
         t = torch.zeros(2, 1000)
         t[0] = torch.ones(1000) * 10
         t[0, 0] = 10000  # spike on strand 0
@@ -45,6 +49,7 @@ class TestNormalization:
         assert out[1].mean() > 0.3
 
     def test_spike_robustness(self):
+        """A single extreme spike must not push the remaining positions near zero."""
         t = torch.zeros(1, 1000)
         t[0] = torch.ones(1000) * 10
         t[0, 0] = 10000  # single spike
@@ -69,22 +74,26 @@ class TestNormalization:
 
 class TestDoubleConv1D:
     def test_forward_shape(self):
+        """Output length must equal input length (same-padding)."""
         m = DoubleConv1D(8, 16, kernel_size=3)
         x = torch.randn(2, 8, 64)
         y = m(x)
         assert y.shape == (2, 16, 64), f"Expected (2,16,64), got {y.shape}"
 
     def test_same_in_out_channels(self):
+        """Works correctly when in_channels == out_channels."""
         m = DoubleConv1D(32, 32, kernel_size=3)
         x = torch.randn(4, 32, 128)
         y = m(x)
         assert y.shape == (4, 32, 128)
 
     def test_even_kernel_raises(self):
+        """An even kernel_size must raise ValueError (same-padding requires odd kernels)."""
         with pytest.raises(ValueError):
             DoubleConv1D(8, 16, kernel_size=4)
 
     def test_large_kernel(self):
+        """kernel_size=7 (larger receptive field) must still preserve sequence length."""
         m = DoubleConv1D(4, 8, kernel_size=7)
         x = torch.randn(1, 4, 256)
         y = m(x)
@@ -98,6 +107,7 @@ class TestDoubleConv1D:
 
 class TestEncoderBlock:
     def test_forward_shapes(self):
+        """Skip has pre-pool shape; pooled is 2× downsampled."""
         m = EncoderBlock(8, 16, kernel_size=3)
         x = torch.randn(2, 8, 64)
         skip, pooled = m(x)
@@ -105,6 +115,7 @@ class TestEncoderBlock:
         assert pooled.shape == (2, 16, 32), f"pooled shape {pooled.shape}"
 
     def test_odd_length_pooled(self):
+        """MaxPool1d floors odd lengths: L=65 → pooled L=32."""
         m = EncoderBlock(4, 8)
         x = torch.randn(1, 4, 65)
         skip, pooled = m(x)
@@ -119,6 +130,7 @@ class TestEncoderBlock:
 
 class TestDecoderBlock:
     def test_forward_shape(self):
+        """Upsampled + skip concat must produce the skip's spatial length."""
         m = DecoderBlock(in_channels=16, skip_channels=8, out_channels=8)
         x = torch.randn(2, 16, 32)  # upsampled from L//2
         skip = torch.randn(2, 8, 64)
@@ -180,6 +192,7 @@ class TestTROGDOR:
         assert y.shape == (2, 1, 256), f"Expected (2,1,256), got {y.shape}"
 
     def test_output_stride_not_power_of_2_raises(self):
+        """output_stride=6 is not a power of 2 and must raise ValueError."""
         with pytest.raises(ValueError):
             TROGDOR(output_stride=6)
 
@@ -222,6 +235,7 @@ class TestTROGDOR:
         assert len(model.outer_encoders) == expected
 
     def test_gradient_flows(self, model):
+        """Loss.backward() must populate at least one parameter gradient."""
         x = torch.randn(2, 2, 256, requires_grad=False)
         y = model(x)
         loss = y.mean()
@@ -255,6 +269,7 @@ class TestTROGDOR:
 
 class TestFocalLoss:
     def test_output_is_scalar(self):
+        """focal_loss must return a zero-dimensional scalar tensor."""
         logits = torch.randn(2, 1, 64)
         targets = torch.zeros(2, 1, 64)
         targets[0, 0, :4] = 1.0
@@ -262,6 +277,7 @@ class TestFocalLoss:
         assert loss.shape == torch.Size([])
 
     def test_output_nonnegative(self):
+        """focal_loss must always be >= 0."""
         logits = torch.randn(4, 1, 32)
         targets = (torch.rand(4, 1, 32) > 0.9).float()
         loss = focal_loss(logits, targets)
@@ -295,6 +311,7 @@ class TestFocalLoss:
 
 class TestTverskyLoss:
     def test_output_in_unit_interval(self):
+        """Tversky loss must lie in [0, 1] (up to float tolerance)."""
         logits = torch.randn(2, 1, 64)
         targets = (torch.rand(2, 1, 64) > 0.9).float()
         loss = tversky_loss(logits, targets)
@@ -351,6 +368,7 @@ class TestTROGDORFocalTversky:
         )
 
     def test_forward_runs(self, model):
+        """Forward pass with combined focal+tversky loss_fn must produce the correct shape."""
         x = torch.randn(2, 2, 256)
         y = model(x)
         assert y.shape == (2, 1, 64)
@@ -364,7 +382,6 @@ class TestTROGDORFocalTversky:
         loss = model._loss_fn(logits, targets)
         loss.backward()
         assert loss.item() >= 0.0
-
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +421,7 @@ class TestTROGDORBCETversky:
 
 class TestFocalTverskyLoss:
     def test_output_in_unit_interval(self):
+        """FTL must lie in [0, 1] (up to float tolerance)."""
         logits = torch.randn(2, 1, 64)
         targets = (torch.rand(2, 1, 64) > 0.9).float()
         loss = focal_tversky_loss(logits, targets)
@@ -457,6 +475,7 @@ class TestTROGDORFocalTverskyLoss:
         )
 
     def test_forward_runs(self, model):
+        """Forward pass with focal_tversky_loss must produce the correct output shape."""
         x = torch.randn(2, 2, 256)
         y = model(x)
         assert y.shape == (2, 1, 64)

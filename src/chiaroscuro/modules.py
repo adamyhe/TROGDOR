@@ -9,28 +9,6 @@ import torch
 import torch.nn.functional as F
 
 
-class Conv1DBlock(torch.nn.Module):
-    """
-    A small class that applies the conv + reduction operation at the core of the
-    Inception module.
-    """
-
-    def __init__(self, in_channels, reduction_channels, out_channels, kernel_size):
-        super(Conv1DBlock, self).__init__()
-        self.reduce = torch.nn.Conv1d(in_channels, reduction_channels, kernel_size=1)
-        self.conv = torch.nn.Conv1d(
-            reduction_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-        )
-        self.bn = torch.nn.BatchNorm1d(out_channels)
-        self.relus = [torch.nn.ReLU(), torch.nn.ReLU()]
-
-    def forward(self, X):
-        return self.relus[1](self.bn(self.conv(self.relus[0](self.reduce(X)))))
-
-
 class DoubleConv1D(torch.nn.Module):
     """Two rounds of Conv1d (same-pad) -> BN -> ReLU."""
 

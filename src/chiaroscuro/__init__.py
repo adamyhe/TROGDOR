@@ -1,7 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .data_transforms import normalization, standardization
-from .predict import predict, predict_chromosome
+from .predict import predict, predict_chromosome, predict_genome
 from .trogdor import TROGDOR
 
 try:

@@ -10,14 +10,13 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
 from tqdm import tqdm
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
 from chiaroscuro.data_transforms import normalization, standardization
-from chiaroscuro.predict import predict_chromosome
+from chiaroscuro.predict import predict_genome
 from chiaroscuro.trogdor import TROGDOR
 
 
@@ -84,12 +83,6 @@ def main():
     transform = standardization if args.standardization else normalization
     model = load_model(args.model, args.device)
 
-    pl_bw = pybigtools.open(args.pl_bigwig)
-    mn_bw = pybigtools.open(args.mn_bigwig)
-
-    chrom_sizes = pl_bw.chroms()
-    chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
-
     peaks_df = pd.read_csv(
         args.peaks,
         sep="\t",
@@ -102,36 +95,21 @@ def main():
     all_probs = []
     all_labels = []
 
-    for chrom in tqdm(chroms, desc="Chromosomes", unit="chr"):
-        if chrom not in chrom_sizes:
-            tqdm.write(f"  Skipping {chrom} (not in bigWig)")
-            continue
-
-        chrom_len = chrom_sizes[chrom]
-
-        pl_vals = np.nan_to_num(
-            np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-        )
-        mn_vals = np.abs(
-            np.nan_to_num(np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32))
-        )
-
-        signal = torch.tensor(np.stack([pl_vals, mn_vals]))  # (2, L)
-
-        with torch.no_grad():
-            logits = predict_chromosome(
-                model,
-                signal,
-                output_stride=args.output_stride,
-                device=args.device,
-                transform=transform,
-                verbose=args.verbose,
-            )  # (1, L // stride)
-
-        probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()  # (n_bins,)
-
+    for chrom, chrom_len, probs in tqdm(
+        predict_genome(
+            model,
+            args.pl_bigwig,
+            args.mn_bigwig,
+            chroms=args.chroms,
+            output_stride=args.output_stride,
+            transform=transform,
+            device=args.device,
+            verbose=args.verbose,
+        ),
+        desc="Chromosomes",
+        unit="chr",
+    ):
         labels = encode_labels(peaks_df, chrom, chrom_len, args.output_stride)
-
         all_probs.append(probs)
         all_labels.append(labels)
 

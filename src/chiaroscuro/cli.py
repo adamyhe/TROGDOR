@@ -21,7 +21,7 @@ import pybigtools
 import torch
 
 from chiaroscuro.data_transforms import normalization
-from chiaroscuro.predict import predict_chromosome
+from chiaroscuro.predict import predict_chromosome, predict_genome
 from chiaroscuro.trogdor import TROGDOR
 
 _help = """
@@ -196,9 +196,8 @@ def cli():
         model = model.to(args.device).eval()
 
         pl_bw = pybigtools.open(args.pl_bigwig)
-        mn_bw = pybigtools.open(args.mn_bigwig)
-
         chrom_sizes = dict(pl_bw.chroms())
+        pl_bw.close()
 
         chroms_to_score = (
             args.chroms if args.chroms is not None else list(chrom_sizes.keys())
@@ -210,51 +209,18 @@ def cli():
         out_bw = pybigtools.open(args.output, "w")
         out_bw.write_header(out_header)
 
-        for chrom in chroms_to_score:
-            if chrom not in chrom_sizes:
-                if args.verbose:
-                    print(f"Skipping {chrom}: not in bigWig")
-                continue
-
-            chrom_len = chrom_sizes[chrom]
-
-            if chrom_len < args.chunk_size:
-                if args.verbose:
-                    print(
-                        f"Skipping {chrom}: length {chrom_len} bp is shorter than "
-                        f"--chunk_size {args.chunk_size}. Re-run with --chunk_size <= {chrom_len} to score it."
-                    )
-                continue
-
-            if args.verbose:
-                print(f"Scoring {chrom} ({chrom_len} bp)...")
-
-            pl_vals = np.nan_to_num(
-                np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-            )
-            mn_vals = np.abs(
-                np.nan_to_num(
-                    np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-                )
-            )
-
-            signal = torch.from_numpy(np.stack([pl_vals, mn_vals])).float()
-
-            logits = predict_chromosome(
-                model,
-                signal,
-                chunk_size=args.chunk_size,
-                overlap=args.overlap,
-                output_stride=args.output_stride,
-                device=args.device,
-                transform=normalization,
-            )
-
-            probs = (
-                torch.sigmoid(logits).squeeze(0).numpy()
-            )  # (chrom_len // output_stride,)
-
-            # Write non-zero values as intervals; each bin i maps to [i*output_stride, (i+1)*output_stride)
+        for chrom, chrom_len, probs in predict_genome(
+            model,
+            args.pl_bigwig,
+            args.mn_bigwig,
+            chroms=args.chroms,
+            output_stride=args.output_stride,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            transform=normalization,
+            device=args.device,
+            verbose=args.verbose,
+        ):
             bin_indices = np.where(probs > 0)[0]
             if len(bin_indices) > 0:
                 starts = (bin_indices * args.output_stride).tolist()
@@ -262,8 +228,6 @@ def cli():
                 values = probs[bin_indices].tolist()
                 out_bw.add_intervals(chrom, starts, ends, values)
 
-        pl_bw.close()
-        mn_bw.close()
         out_bw.close()
 
     elif args.cmd == "peaks":
