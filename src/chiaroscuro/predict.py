@@ -4,9 +4,12 @@
 """
 The predict function is copied from tangermeme v1.0.2 by Jacob Schreiber to reduce
 dependencies. predict_chromosome wraps the predict function to tile predictions
-across a whole chromosome.
+across a whole chromosome. predict_genome wraps the predict_chromosome function
+to tile predictions across the whole genome.
 """
 
+import numpy as np
+import pybigtools
 import torch
 from tqdm import trange
 
@@ -21,7 +24,10 @@ def predict(
     device="cuda",
     verbose=False,
 ):
-    """Make batched predictions in a memory-efficient manner.
+    """
+    Function copied from tangermeme v1.0.2 by Jacob Schreiber under MIT license.
+
+    Make batched predictions in a memory-efficient manner.
 
     This function will take a PyTorch model and make predictions from it using
     the forward function, with optional additional arguments to the model. The
@@ -64,8 +70,10 @@ def predict(
 
     dtype: str or torch.dtype or None, optional
             The dtype to use with mixed precision autocasting. If None, use the dtype of
-            the *model*. This allows you to use int8 to represent large data sets and
-            only convert batches to the higher precision, saving memory. Defailt is None.
+            the *model*. Pass "auto" to select bfloat16 on CUDA (if supported) or
+            float32 otherwise. float16 is not supported. This allows you to use int8 to
+            represent large data sets and only convert batches to the higher precision,
+            saving memory. Default is None.
 
     device: str or torch.device, optional
             The device to move the model and batches to when making predictions. If
@@ -93,8 +101,20 @@ def predict(
             dtype = next(model.parameters()).dtype
         except:
             dtype = torch.float32
+    elif dtype == "auto":
+        device_type = torch.device(device).type
+        if device_type == "cuda" and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float32
     elif isinstance(dtype, str):
         dtype = getattr(torch, dtype)
+
+    if dtype == torch.float16:
+        raise ValueError(
+            "float16 is not supported; the model has not been trained or evaluated "
+            "with float16. Use dtype='auto', torch.bfloat16, or torch.float32."
+        )
 
     if args is not None:
         for arg in args:
@@ -116,7 +136,11 @@ def predict(
             if X_.shape[0] == 0:
                 continue
 
-            with torch.autocast(device_type=device, dtype=dtype):
+            device_type = torch.device(device).type
+            autocast_enabled = dtype == torch.bfloat16
+            with torch.autocast(
+                device_type=device_type, dtype=dtype, enabled=autocast_enabled
+            ):
                 if args is not None:
                     args_ = [a[start:end].type(dtype).to(device) for a in args]
                     y_ = model(X_, *args_)
@@ -156,6 +180,7 @@ def predict_chromosome(
     batch_size=8,
     device="cuda",
     transform=None,
+    dtype="auto",
     verbose=False,
 ):
     """Score a full chromosome with chunked sliding-window inference.
@@ -231,7 +256,9 @@ def predict_chromosome(
     X_all = torch.stack(chunks)  # (n_chunks, 2, chunk_size)
 
     # Batched inference via predict(); returns (n_chunks, 1, out_chunk) on CPU
-    preds = predict(model, X_all, batch_size=batch_size, device=device, verbose=verbose)
+    preds = predict(
+        model, X_all, batch_size=batch_size, device=device, dtype=dtype, verbose=verbose
+    )
 
     # Stitch center crops into the output tensor
     out_total = total_length // output_stride
@@ -255,28 +282,102 @@ def predict_chromosome(
     return scores
 
 
-MIT_LICENSE = """
-MIT License
+def predict_genome(
+    model,
+    pl_bigwig,
+    mn_bigwig,
+    chroms=None,
+    output_stride=16,
+    chunk_size=262144,
+    overlap=32768,
+    transform=None,
+    device="cuda",
+    verbose=False,
+):
+    """Score all chromosomes in a pair of bigWig files.
 
-Copyright (c) 2024 Jacob Schreiber
+    Generator that yields ``(chrom, chrom_len, probs)`` for each scored
+    chromosome. Chromosomes absent from the bigWig or shorter than
+    ``chunk_size`` are skipped (with a warning when ``verbose=True``).
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+    Parameters
+    ----------
+    model : torch.nn.Module
+    pl_bigwig : str
+        Path to the plus-strand bigWig file.
+    mn_bigwig : str
+        Path to the minus-strand bigWig file.
+    chroms : list of str or None
+        Chromosomes to score. If None, all chromosomes in the plus-strand
+        bigWig are scored.
+    output_stride : int
+        Ratio of input positions to output bins. Default 16.
+    chunk_size : int
+        Input chunk length. Default 262144.
+    overlap : int
+        Edge overlap in input positions. Default 32768.
+    transform : callable or None
+        Per-chunk transform applied before inference. Default None.
+    device : str
+        Device for inference. Default "cuda".
+    verbose : bool
+        Print per-chromosome progress. Default False.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+    Yields
+    ------
+    chrom : str
+    chrom_len : int
+    probs : np.ndarray, shape=(chrom_len // output_stride,), dtype=float32
+    """
+    pl_bw = pybigtools.open(pl_bigwig)
+    mn_bw = pybigtools.open(mn_bigwig)
+    try:
+        chrom_sizes = dict(pl_bw.chroms())
+        chroms_to_score = chroms if chroms is not None else list(chrom_sizes.keys())
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"""
+        with torch.no_grad():
+            for chrom in chroms_to_score:
+                if chrom not in chrom_sizes:
+                    if verbose:
+                        print(f"Skipping {chrom}: not in bigWig")
+                    continue
 
-__license__ = MIT_LICENSE
+                chrom_len = chrom_sizes[chrom]
+
+                if chrom_len < chunk_size:
+                    if verbose:
+                        print(
+                            f"Skipping {chrom}: length {chrom_len} bp is shorter than "
+                            f"chunk_size {chunk_size}. Re-run with chunk_size <= {chrom_len} to score it."
+                        )
+                    continue
+
+                if verbose:
+                    print(f"Scoring {chrom} ({chrom_len} bp)...")
+
+                pl_vals = np.nan_to_num(
+                    np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+                )
+                mn_vals = np.abs(
+                    np.nan_to_num(
+                        np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+                    )
+                )
+
+                signal = torch.tensor(np.stack([pl_vals, mn_vals]))
+                logits = predict_chromosome(
+                    model,
+                    signal,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                    output_stride=output_stride,
+                    device=device,
+                    transform=transform,
+                    verbose=verbose,
+                )
+
+                probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
+                yield chrom, chrom_len, probs
+    finally:
+        pl_bw.close()
+        mn_bw.close()
