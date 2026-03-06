@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 
-def focal_loss(logits, targets, alpha=0.999, gamma=2.0):
+def focal_loss(logits, targets, alpha=0.99, gamma=2.0):
     """Alpha-balanced focal loss (Lin et al. 2017).
 
     Down-weights easy examples via (1 - p_t)^gamma, focusing training on
@@ -29,13 +29,14 @@ def tversky_loss(logits, targets, alpha=0.3, beta=0.7, smooth=1.0):
     positives are rare and recall matters.
     """
     p = torch.sigmoid(logits)
-    tp = (p * targets).sum()
-    fp = (p * (1 - targets)).sum()
-    fn = ((1 - p) * targets).sum()
-    return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
+    dims = list(range(1, p.dim()))   # all dims except batch
+    tp = (p * targets).sum(dim=dims)
+    fp = (p * (1 - targets)).sum(dim=dims)
+    fn = ((1 - p) * targets).sum(dim=dims)
+    return (1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)).mean()
 
 
-def focal_tversky_loss(logits, targets, alpha=0.3, beta=0.7, gamma=4 / 3, smooth=1.0):
+def focal_tversky_loss(logits, targets, alpha=0.3, beta=0.7, gamma=3 / 4, smooth=1.0):
     """Focal Tversky loss (Abraham & Khan 2019, arXiv:1810.07842).
 
     Raises the Tversky loss to the power 1/gamma. When gamma > 1 the loss is
