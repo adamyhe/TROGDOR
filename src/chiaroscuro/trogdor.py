@@ -15,7 +15,6 @@ import torch
 from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
-from .losses import focal_tversky_loss
 from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
 from .predict import predict
 
@@ -59,7 +58,8 @@ class TROGDOR(torch.nn.Module):
     loss_fn : callable, optional
         Loss function with signature ``(logits, targets) -> scalar``.
         Stored as ``self._loss_fn`` (wrapped with ``functools.partial`` if
-        ``loss_kwargs`` is provided). Default is :func:`focal_tversky_loss`.
+        ``loss_kwargs`` is provided). Default is
+        ``torch.nn.BCEWithLogitsLoss()``.
     loss_kwargs : dict or None, optional
         Keyword arguments forwarded to ``loss_fn`` via ``functools.partial``.
         Default is None.
@@ -75,7 +75,7 @@ class TROGDOR(torch.nn.Module):
         kernel_size=3,
         name="TROGDOR",
         verbose=True,
-        loss_fn=focal_tversky_loss,
+        loss_fn=None,
         loss_kwargs=None,
     ):
         super(TROGDOR, self).__init__()
@@ -133,6 +133,8 @@ class TROGDOR(torch.nn.Module):
         # Output head
         self.head = torch.nn.Conv1d(ch, 1, kernel_size=1)
 
+        if loss_fn is None:
+            loss_fn = torch.nn.BCEWithLogitsLoss()
         _kw = loss_kwargs or {}
         self._loss_fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
 
