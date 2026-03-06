@@ -21,6 +21,7 @@ def predict(
     func=None,
     batch_size=32,
     dtype=None,
+    desc=None,
     device="cuda",
     verbose=False,
 ):
@@ -74,6 +75,9 @@ def predict(
             float32 otherwise. float16 is not supported. This allows you to use int8 to
             represent large data sets and only convert batches to the higher precision,
             saving memory. Default is None.
+
+    desc: str or None, optional
+            A string to display in the progress bar. Default is None.
 
     device: str or torch.device, optional
             The device to move the model and batches to when making predictions. If
@@ -129,7 +133,7 @@ def predict(
     with torch.no_grad():
         batch_size = min(batch_size, X.shape[0])
 
-        for start in trange(0, X.shape[0], batch_size, disable=not verbose):
+        for start in trange(0, X.shape[0], batch_size, disable=not verbose, desc=desc):
             end = start + batch_size
             X_ = X[start:end].type(dtype).to(device)
 
@@ -181,6 +185,7 @@ def predict_chromosome(
     device="cuda",
     transform=None,
     dtype="auto",
+    desc=None,
     verbose=False,
 ):
     """Score a full chromosome with chunked sliding-window inference.
@@ -215,6 +220,8 @@ def predict_chromosome(
         Number of chunks to process in one forward pass. Default is 8.
     device : str, optional
         Device for inference. Default is "cuda".
+    desc : str, optional
+        Description for tqdm progress bar. Default is None.
     verbose : bool, optional
         Whether to display a tqdm progress bar over chunks. Default is False.
 
@@ -257,7 +264,13 @@ def predict_chromosome(
 
     # Batched inference via predict(); returns (n_chunks, 1, out_chunk) on CPU
     preds = predict(
-        model, X_all, batch_size=batch_size, device=device, dtype=dtype, verbose=verbose
+        model,
+        X_all,
+        batch_size=batch_size,
+        device=device,
+        dtype=dtype,
+        verbose=verbose,
+        desc=desc,
     )
 
     # Stitch center crops into the output tensor
@@ -352,9 +365,6 @@ def predict_genome(
                         )
                     continue
 
-                if verbose:
-                    print(f"Scoring {chrom} ({chrom_len} bp)...")
-
                 pl_vals = np.nan_to_num(
                     np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
                 )
@@ -372,6 +382,7 @@ def predict_genome(
                     overlap=overlap,
                     output_stride=output_stride,
                     device=device,
+                    desc=f"Scoring {chrom} ({chrom_len} bp)",
                     transform=transform,
                     verbose=verbose,
                 )
