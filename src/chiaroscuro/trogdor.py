@@ -354,4 +354,4 @@ class TROGDOR(torch.nn.Module):
             if early_stopping is not None and early_stop_count >= early_stopping:
                 break
 
-        torch.save(self, f"{self.name}.final.torch")
+        torch.save(self.state_dict(), f"{self.name}.final.torch")
