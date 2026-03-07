@@ -11,6 +11,9 @@ from chiaroscuro.data_transforms import normalization
 from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
 from chiaroscuro.trogdor import TROGDOR
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "models")
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--pos_weight",
@@ -20,8 +23,6 @@ parser.add_argument(
     "to compensate for class imbalance. Default: no reweighting.",
 )
 args = parser.parse_args()
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 
 TRAIN_SAMPLES = ["G1", "G2", "G3", "G5"]
 VAL_SAMPLES = ["G6"]
@@ -89,7 +90,10 @@ else:
     loss_fn = None  # use TROGDOR default (BCEWithLogitsLoss with no reweighting)
 
 # --- Model + optimizer ---
-model = TROGDOR(name="TROGDOR_BCE", loss_fn=loss_fn).cuda()
+
+model = TROGDOR(
+    name=f"{MODEL_DIR}/TROGDOR_BCE_{args.pos_weight}", loss_fn=loss_fn
+).cuda()
 optimizer = torch.optim.AdamW(
     model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
 )
