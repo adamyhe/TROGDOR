@@ -189,6 +189,13 @@ def cli():
         help="BH FDR threshold for reporting peaks (default: 0.05)",
     )
     parser_peaks.add_argument(
+        "-s",
+        "--min_score",
+        type=float,
+        default=0.9,
+        help="Minimum score to consider as a candidate bin before BH correction (default: 0.9)",
+    )
+    parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
 
@@ -268,7 +275,7 @@ def cli():
             ivals = [
                 (s, e, v)
                 for s, e, v in in_bw.records(chrom, 0, chrom_len)
-                if not np.isnan(v)
+                if not np.isnan(v) and v >= args.min_score
             ]
             chrom_intervals[chrom] = ivals
             all_probs.extend(v for _, _, v in ivals)
