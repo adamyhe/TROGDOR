@@ -16,15 +16,22 @@ The package installs four CLI aliases that all invoke the same entry point: `TRO
 
 ## CLI Pipeline
 
-The tool operates in two steps (`pipeline`/`burninate` is a planned wrapper for both):
+The tool operates in three subcommands:
 
-1. **score** – Score the whole genome using the pre-trained model; outputs a bigWig of probabilities
-2. **peaks** – Call peaks from the scored bigWig using BH FDR correction
+1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of BH-adjusted probabilities
+2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig using a score threshold derived from a BH FDR threshold
+3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix
 
-Example:
+Example (individual steps):
 ```bash
 trogdor score -M model.torch -p plus.bw -m minus.bw -o scores.bw -d cuda
-trogdor peaks -t scores.bw -o peaks.bed --fdr_threshold 0.05
+trogdor peaks -i scores.bw -o peaks.bed.gz --fdr_threshold 0.05
+```
+
+Example (full pipeline):
+```bash
+trogdor pipeline -M model.torch -p plus.bw -m minus.bw -n sample -d cuda
+# writes sample.prob.bw and sample.peaks.bed.gz
 ```
 
 Short contigs shorter than `--chunk_size` (default 262144) are automatically skipped by `score` with a warning when `-v` is set.
@@ -34,6 +41,7 @@ Short contigs shorter than `--chunk_size` (default 262144) are automatically ski
 ### Package layout
 
 - `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
+- `src/chiaroscuro/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
@@ -63,6 +71,3 @@ Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normal
 
 `standardization()` is a deprecated alias for the original global-max-based version.
 
-## Known Issues / In-Progress
-
-- The `peaks` and `pipeline`/`burninate` subcommands are not yet implemented (they `pass`).

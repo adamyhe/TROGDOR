@@ -1,6 +1,7 @@
 # commands.py
 # Author: Adam He <adamyhe@gmail.com>
 
+import argparse
 import io
 import subprocess
 
@@ -94,11 +95,23 @@ def cmd_score(args):
                 f"No model specified — downloading default weights from {HF_REPO_ID}..."
             )
         model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+    device = args.device
+    if device == "cuda" and not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            print("Warning: CUDA not available, falling back to MPS.")
+            device = "mps"
+        else:
+            print("Warning: CUDA not available, falling back to CPU.")
+            device = "cpu"
+    elif device == "mps" and not torch.backends.mps.is_available():
+        print("Warning: MPS not available, falling back to CPU.")
+        device = "cpu"
+
     model = TROGDOR()
     model.load_state_dict(
         torch.load(model_path, weights_only=True, map_location="cpu"), strict=False
     )
-    model = model.to(args.device).eval()
+    model = model.to(device).eval()
 
     pl_bw = pybigtools.open(args.pl_bigwig)
     pl_chrom_sizes = dict(pl_bw.chroms())
@@ -126,7 +139,7 @@ def cmd_score(args):
         chunk_size=args.chunk_size,
         overlap=args.overlap,
         transform=normalization,
-        device=args.device,
+        device=device,
         verbose=args.verbose,
     ):
         chrom_dict[chrom] = chrom_len
@@ -251,3 +264,48 @@ def cmd_peaks(args):
     else:
         with open(args.output, "w") as out_bed:
             _write_peaks(out_bed)
+
+
+def cmd_pipeline(args):
+    """Run the full pipeline: score the genome, then call peaks.
+
+    Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
+    Output paths are derived from ``args.name``:
+
+    - ``{name}.prob.bw`` — intermediate scored bigWig (kept)
+    - ``{name}.peaks.bed.gz`` — final bgzipped BED of peak calls
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments. Expected attributes are the union of those
+        required by ``cmd_score`` and ``cmd_peaks``:
+
+        ``model`` (str or None), ``pl_bigwig`` (str), ``mn_bigwig`` (str),
+        ``name`` (str), ``device`` (str), ``chunk_size`` (int),
+        ``overlap`` (int), ``output_stride`` (int), ``chroms`` (list or None),
+        ``min_score`` (float), ``fdr_threshold`` (float), ``verbose`` (bool).
+    """
+    cmd_score(
+        argparse.Namespace(
+            model=args.model,
+            pl_bigwig=args.pl_bigwig,
+            mn_bigwig=args.mn_bigwig,
+            output=f"{args.name}.prob.bw",
+            device=args.device,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            output_stride=args.output_stride,
+            chroms=args.chroms,
+            min_score=args.min_score,
+            verbose=args.verbose,
+        )
+    )
+    cmd_peaks(
+        argparse.Namespace(
+            input=f"{args.name}.prob.bw",
+            output=f"{args.name}.peaks.bed.gz",
+            fdr_threshold=args.fdr_threshold,
+            verbose=args.verbose,
+        )
+    )
