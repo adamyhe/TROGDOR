@@ -15,6 +15,8 @@ outputs imputed transcription initiation sites.
 """
 
 import argparse
+import io
+import subprocess
 
 import numpy as np
 import pybigtools
@@ -37,27 +39,17 @@ The following commands are available:
 """
 
 
-def _bh_threshold(probs, alpha):
-    m = len(probs)
-    if m == 0:
-        return None
-    p = 1.0 - np.asarray(probs, dtype=np.float64)
-    sorted_p = np.sort(p)
-    passing = np.where(sorted_p <= (np.arange(1, m + 1) / m) * alpha)[0]
-    if len(passing) == 0:
-        return None
-    return float(1.0 - sorted_p[passing[-1]])
-
 
 def _merge_intervals(intervals):
     if not intervals:
         return []
-    merged = [intervals[0]]
-    for s, e in intervals[1:]:
+    merged = [list(intervals[0])]
+    for s, e, v in intervals[1:]:
         if s == merged[-1][1]:
-            merged[-1] = (merged[-1][0], e)
+            merged[-1][1] = e
+            merged[-1][2] = max(merged[-1][2], v)
         else:
-            merged.append((s, e))
+            merged.append([s, e, v])
     return merged
 
 
@@ -166,6 +158,13 @@ def cli():
         help="Chromosomes to score (default: all chromosomes in the bigWig)",
     )
     parser_score.add_argument(
+        "-s",
+        "--min_score",
+        type=float,
+        default=0.9,
+        help="Minimum raw score to include as a candidate bin before BH correction (default: 0.9)",
+    )
+    parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
 
@@ -187,13 +186,6 @@ def cli():
         type=float,
         default=0.05,
         help="BH FDR threshold for reporting peaks (default: 0.05)",
-    )
-    parser_peaks.add_argument(
-        "-s",
-        "--min_score",
-        type=float,
-        default=0.9,
-        help="Minimum score to consider as a candidate bin before BH correction (default: 0.9)",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
@@ -233,32 +225,64 @@ def cli():
             args.chroms if args.chroms is not None else list(chrom_sizes.keys())
         )
 
-        chroms_dict = {c: chrom_sizes[c] for c in chroms_to_score if c in chrom_sizes}
+        # Pass 1: score the genome and collect all nonzero bins
+        all_intervals = []  # list of (chrom, start, end, prob)
+        chrom_dict = {}
+        for chrom, chrom_len, probs in predict_genome(
+            model,
+            args.pl_bigwig,
+            args.mn_bigwig,
+            chroms=chroms_to_score,
+            output_stride=args.output_stride,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            transform=normalization,
+            device=args.device,
+            verbose=args.verbose,
+        ):
+            chrom_dict[chrom] = chrom_len
+            bin_indices = np.where(probs >= args.min_score)[0]
+            for i in bin_indices:
+                all_intervals.append((
+                    chrom,
+                    int(i * args.output_stride),
+                    int((i + 1) * args.output_stride),
+                    float(probs[i]),
+                ))
 
-        def _intervals():
-            for chrom, chrom_len, probs in predict_genome(
-                model,
-                args.pl_bigwig,
-                args.mn_bigwig,
-                chroms=chroms_to_score,
-                output_stride=args.output_stride,
-                chunk_size=args.chunk_size,
-                overlap=args.overlap,
-                transform=normalization,
-                device=args.device,
-                verbose=args.verbose,
-            ):
-                bin_indices = np.where(probs > 0)[0]
-                for i in bin_indices:
-                    yield (
-                        chrom,
-                        int(i * args.output_stride),
-                        int((i + 1) * args.output_stride),
-                        float(probs[i]),
-                    )
+        # Pass 2: BH correction over all collected bins
+        all_probs_arr = np.array([v for _, _, _, v in all_intervals])
+        m = len(all_probs_arr)
+        if m > 0:
+            p = 1.0 - all_probs_arr
+            sort_idx = np.argsort(p)
+            sorted_p = p[sort_idx]
+            raw_q = sorted_p * m / np.arange(1, m + 1)
+            q_sorted = np.minimum.accumulate(raw_q[::-1])[::-1]
+            q_values = np.empty(m)
+            q_values[sort_idx] = q_sorted
+        else:
+            q_values = np.array([])
+
+        if args.verbose:
+            n_pass = int(np.sum(q_values < 1.0))
+            print(f"Writing {n_pass} bins with 1−q > 0 out of {m} total nonzero bins")
+
+        # Build prob → (1 − q) lookup; on ties keep the highest value
+        prob_to_val = {}
+        for prob, q in zip(all_probs_arr.tolist(), q_values.tolist()):
+            val = 1.0 - q
+            if val > 0 and (prob not in prob_to_val or val > prob_to_val[prob]):
+                prob_to_val[prob] = val
+
+        def _fdr_intervals():
+            for chrom, start, end, prob in all_intervals:
+                val = prob_to_val.get(prob)
+                if val is not None:
+                    yield chrom, start, end, val
 
         out_bw = pybigtools.open(args.output, "w")
-        out_bw.write(chroms_dict, _intervals())
+        out_bw.write(chrom_dict, _fdr_intervals())
 
     elif args.cmd == "peaks":
         in_bw = pybigtools.open(args.input)
@@ -275,31 +299,39 @@ def cli():
             ivals = [
                 (s, e, v)
                 for s, e, v in in_bw.records(chrom, 0, chrom_len)
-                if not np.isnan(v) and v >= args.min_score
+                if not np.isnan(v)
             ]
             chrom_intervals[chrom] = ivals
             all_probs.extend(v for _, _, v in ivals)
         in_bw.close()
 
-        threshold = _bh_threshold(
-            np.array(all_probs, dtype=np.float64), args.fdr_threshold
-        )
+        threshold = 1.0 - args.fdr_threshold
 
         if args.verbose:
-            if threshold is None:
-                print("No bins pass BH FDR threshold; writing empty BED file")
+            n_pass = sum(1 for p in all_probs if p >= threshold)
+            if n_pass == 0:
+                print("No bins pass FDR threshold; writing empty BED file")
             else:
-                n_pass = sum(1 for p in all_probs if p >= threshold)
-                print(f"BH probability threshold: {threshold:.6f} ({n_pass} bins pass)")
+                print(f"Score threshold: {threshold:.6f} ({n_pass} bins pass)")
 
-        with open(args.output, "w") as out_bed:
-            if threshold is not None:
-                for chrom in sorted(chrom_sizes):
-                    passing = [
-                        (s, e) for s, e, v in chrom_intervals[chrom] if v >= threshold
-                    ]
-                    for start, end in _merge_intervals(passing):
-                        out_bed.write(f"{chrom}\t{start}\t{end}\n")
+        def _write_peaks(out_bed):
+            for chrom in sorted(chrom_sizes):
+                passing = [(s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold]
+                for start, end, max_v in _merge_intervals(passing):
+                    q = 1.0 - max_v
+                    out_bed.write(f"{chrom}\t{start}\t{end}\t{q:.6g}\n")
+
+        if args.output.endswith(".gz"):
+            with open(args.output, "wb") as raw_out:
+                proc = subprocess.Popen(["bgzip"], stdin=subprocess.PIPE, stdout=raw_out)
+                with io.TextIOWrapper(proc.stdin, encoding="utf-8") as out_bed:
+                    _write_peaks(out_bed)
+                proc.wait()
+                if proc.returncode != 0:
+                    raise RuntimeError(f"bgzip exited with code {proc.returncode}")
+        else:
+            with open(args.output, "w") as out_bed:
+                _write_peaks(out_bed)
 
     elif args.cmd in ("pipeline", "burninate"):
         pass
