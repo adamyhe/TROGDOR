@@ -212,8 +212,14 @@ def cli():
         model = model.to(args.device).eval()
 
         pl_bw = pybigtools.open(args.pl_bigwig)
-        chrom_sizes = dict(pl_bw.chroms())
+        pl_chrom_sizes = dict(pl_bw.chroms())
         pl_bw.close()
+
+        mn_bw = pybigtools.open(args.mn_bigwig)
+        mn_chroms = set(mn_bw.chroms().keys())
+        mn_bw.close()
+
+        chrom_sizes = {c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms}
 
         chroms_to_score = (
             args.chroms if args.chroms is not None else list(chrom_sizes.keys())

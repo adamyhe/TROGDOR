@@ -131,9 +131,17 @@ class NascentDataset(torch.utils.data.Dataset):
 
         # Pre-compute window indices from BigWig chromosome sizes
         for dataset_idx, pl_bw in enumerate(tqdm.tqdm(pl_bigwigs)):
-            bw = pybigtools.open(pl_bw)
-            chrom_sizes = bw.chroms()
-            bw.close()
+            pl_bw = pybigtools.open(pl_bw)
+            pl_chrom_sizes = dict(pl_bw.chroms())
+            pl_bw.close()
+
+            mn_bw = pybigtools.open(mn_bigwigs[dataset_idx])
+            mn_chroms = set(mn_bw.chroms().keys())
+            mn_bw.close()
+
+            chrom_sizes = {
+                c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms
+            }
 
             if tss_beds is not None:
                 tss_df = pd.read_csv(
