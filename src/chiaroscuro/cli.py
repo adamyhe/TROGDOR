@@ -232,7 +232,7 @@ def cli():
                 model,
                 args.pl_bigwig,
                 args.mn_bigwig,
-                chroms=args.chroms,
+                chroms=chroms_to_score,
                 output_stride=args.output_stride,
                 chunk_size=args.chunk_size,
                 overlap=args.overlap,
@@ -242,7 +242,12 @@ def cli():
             ):
                 bin_indices = np.where(probs > 0)[0]
                 for i in bin_indices:
-                    yield (chrom, int(i * args.output_stride), int((i + 1) * args.output_stride), float(probs[i]))
+                    yield (
+                        chrom,
+                        int(i * args.output_stride),
+                        int((i + 1) * args.output_stride),
+                        float(probs[i]),
+                    )
 
         out_bw = pybigtools.open(args.output, "w")
         out_bw.write(chroms_dict, _intervals())
