@@ -175,7 +175,7 @@ def cli():
         "peaks", help="Call peaks from the tracks predicted by the refine method"
     )
     parser_peaks.add_argument(
-        "-t", "--input", required=True, type=str, help="bigWig file of TROGDOR scores"
+        "-i", "--input", required=True, type=str, help="bigWig file of TROGDOR scores"
     )
     parser_peaks.add_argument(
         "-o", "--output", required=True, type=str, help="Output bed file of peak calls"
@@ -262,7 +262,7 @@ def cli():
         for chrom, chrom_len in chrom_sizes.items():
             ivals = [
                 (s, e, v)
-                for s, e, v in in_bw.intervals(chrom, 0, chrom_len)
+                for s, e, v in in_bw.records(chrom, 0, chrom_len)
                 if not np.isnan(v)
             ]
             chrom_intervals[chrom] = ivals
