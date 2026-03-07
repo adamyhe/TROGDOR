@@ -219,32 +219,27 @@ def cli():
             args.chroms if args.chroms is not None else list(chrom_sizes.keys())
         )
 
-        # Build output bigWig header
-        out_header = [(c, chrom_sizes[c]) for c in chroms_to_score if c in chrom_sizes]
+        chroms_dict = {c: chrom_sizes[c] for c in chroms_to_score if c in chrom_sizes}
+
+        def _intervals():
+            for chrom, chrom_len, probs in predict_genome(
+                model,
+                args.pl_bigwig,
+                args.mn_bigwig,
+                chroms=args.chroms,
+                output_stride=args.output_stride,
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                transform=normalization,
+                device=args.device,
+                verbose=args.verbose,
+            ):
+                bin_indices = np.where(probs > 0)[0]
+                for i in bin_indices:
+                    yield (chrom, int(i * args.output_stride), int((i + 1) * args.output_stride), float(probs[i]))
 
         out_bw = pybigtools.open(args.output, "w")
-        out_bw.write_header(out_header)
-
-        for chrom, chrom_len, probs in predict_genome(
-            model,
-            args.pl_bigwig,
-            args.mn_bigwig,
-            chroms=args.chroms,
-            output_stride=args.output_stride,
-            chunk_size=args.chunk_size,
-            overlap=args.overlap,
-            transform=normalization,
-            device=args.device,
-            verbose=args.verbose,
-        ):
-            bin_indices = np.where(probs > 0)[0]
-            if len(bin_indices) > 0:
-                starts = (bin_indices * args.output_stride).tolist()
-                ends = ((bin_indices + 1) * args.output_stride).tolist()
-                values = probs[bin_indices].tolist()
-                out_bw.add_intervals(chrom, starts, ends, values)
-
-        out_bw.close()
+        out_bw.write(chroms_dict, _intervals())
 
     elif args.cmd == "peaks":
         in_bw = pybigtools.open(args.input)
