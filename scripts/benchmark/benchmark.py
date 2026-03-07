@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
-from tqdm import tqdm
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
 from chiaroscuro.data_transforms import normalization, standardization
@@ -95,19 +94,15 @@ def main():
     all_probs = []
     all_labels = []
 
-    for chrom, chrom_len, probs in tqdm(
-        predict_genome(
-            model,
-            args.pl_bigwig,
-            args.mn_bigwig,
-            chroms=args.chroms,
-            output_stride=args.output_stride,
-            transform=transform,
-            device=args.device,
-            verbose=args.verbose,
-        ),
-        desc="Chromosomes",
-        unit="chr",
+    for chrom, chrom_len, probs in predict_genome(
+        model,
+        args.pl_bigwig,
+        args.mn_bigwig,
+        chroms=args.chroms,
+        output_stride=args.output_stride,
+        transform=transform,
+        device=args.device,
+        verbose=args.verbose,
     ):
         labels = encode_labels(peaks_df, chrom, chrom_len, args.output_stride)
         all_probs.append(probs)
