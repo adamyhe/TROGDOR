@@ -19,6 +19,7 @@ import argparse
 import numpy as np
 import pybigtools
 import torch
+import tqdm
 from huggingface_hub import hf_hub_download
 
 from chiaroscuro.data_transforms import normalization
@@ -259,7 +260,11 @@ def cli():
         # Pass 1: collect all intervals per chrom and aggregate probs for BH
         chrom_intervals = {}
         all_probs = []
-        for chrom, chrom_len in chrom_sizes.items():
+        for chrom, chrom_len in tqdm.tqdm(
+            chrom_sizes.items(),
+            desc="Loading scores",
+            disable=not args.verbose,
+        ):
             ivals = [
                 (s, e, v)
                 for s, e, v in in_bw.records(chrom, 0, chrom_len)
