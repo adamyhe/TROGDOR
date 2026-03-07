@@ -2,7 +2,8 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-Loss functions for training TROGDOR.
+Custom loss functions for training TROGDOR. None of them are as good as
+BCEWithLogitsLoss, but I've kept them here in case people want to experiment.
 """
 
 import torch
@@ -29,7 +30,7 @@ def tversky_loss(logits, targets, alpha=0.3, beta=0.7, smooth=1.0):
     positives are rare and recall matters.
     """
     p = torch.sigmoid(logits)
-    dims = list(range(1, p.dim()))   # all dims except batch
+    dims = list(range(1, p.dim()))  # all dims except batch
     tp = (p * targets).sum(dim=dims)
     fp = (p * (1 - targets)).sum(dim=dims)
     fn = ((1 - p) * targets).sum(dim=dims)

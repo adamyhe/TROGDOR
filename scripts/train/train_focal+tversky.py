@@ -6,8 +6,8 @@ import os
 import torch
 import wandb
 
-from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
 from chiaroscuro.data_transforms import normalization
+from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
 from chiaroscuro.losses import focal_loss, tversky_loss
 from chiaroscuro.trogdor import TROGDOR
 
@@ -81,7 +81,7 @@ val_loader = torch.utils.data.DataLoader(
 
 # --- Model + optimizer ---
 model = TROGDOR(
-    name="TROGDOR",
+    name="TROGDOR_Focal+Tversky",
     loss_fn=lambda logits, y: focal_loss(logits, y) + tversky_loss(logits, y),
 ).cuda()
 optimizer = torch.optim.AdamW(

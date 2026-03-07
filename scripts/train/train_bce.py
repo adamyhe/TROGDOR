@@ -75,18 +75,9 @@ train_loader = MixedBatchLoader(
 )
 
 # --- Validation dataset (G6, tiled, labels required for metrics) ---
-val_dataset = NascentDataset(
-    val_pl,
-    val_mn,
-    tss_beds=val_tss,
-    transform=normalization
-)
+val_dataset = NascentDataset(val_pl, val_mn, tss_beds=val_tss, transform=normalization)
 val_loader = torch.utils.data.DataLoader(
-    val_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=4,
-    pin_memory=True,
+    val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
 )
 
 # --- Loss function ---
