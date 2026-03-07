@@ -19,10 +19,14 @@ import argparse
 import numpy as np
 import pybigtools
 import torch
+from huggingface_hub import hf_hub_download
 
 from chiaroscuro.data_transforms import normalization
-from chiaroscuro.predict import predict_chromosome, predict_genome
+from chiaroscuro.predict import predict_genome
 from chiaroscuro.trogdor import TROGDOR
+
+HF_REPO_ID = "adamyhe/TROGDOR"
+HF_MODEL_FILENAME = "TROGDOR.torch"
 
 _help = """
 The following commands are available:
@@ -68,8 +72,9 @@ def cli():
 
     # pipeline (alias: burninate)
     parser_pipeline = subparsers.add_parser(
-        "pipeline", aliases=["burninate"],
-        help="Run the full TROGDOR pipeline from raw data to peak calls"
+        "pipeline",
+        aliases=["burninate"],
+        help="Run the full TROGDOR pipeline from raw data to peak calls",
     )
     parser_pipeline.add_argument(
         "-p",
@@ -107,9 +112,13 @@ def cli():
     parser_score.add_argument(
         "-M",
         "--model",
-        required=True,
+        required=False,
+        default=None,
         type=str,
-        help="Path to a TROGDOR model state dict (.torch)",
+        help=(
+            "Path to a TROGDOR model state dict (.torch). If omitted, the default "
+            "pretrained weights are downloaded from HuggingFace Hub and cached locally."
+        ),
     )
     parser_score.add_argument(
         "-p",
@@ -189,9 +198,16 @@ def cli():
 
     # Run provided command
     if args.cmd == "score":
+        model_path = args.model
+        if model_path is None:
+            if args.verbose:
+                print(
+                    f"No model specified — downloading default weights from {HF_REPO_ID}..."
+                )
+            model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
         model = TROGDOR()
         model.load_state_dict(
-            torch.load(args.model, weights_only=True, map_location="cpu"), strict=False
+            torch.load(model_path, weights_only=True, map_location="cpu"), strict=False
         )
         model = model.to(args.device).eval()
 
@@ -247,7 +263,9 @@ def cli():
             all_probs.extend(v for _, _, v in ivals)
         in_bw.close()
 
-        threshold = _bh_threshold(np.array(all_probs, dtype=np.float64), args.fdr_threshold)
+        threshold = _bh_threshold(
+            np.array(all_probs, dtype=np.float64), args.fdr_threshold
+        )
 
         if args.verbose:
             if threshold is None:
@@ -260,9 +278,7 @@ def cli():
             if threshold is not None:
                 for chrom in sorted(chrom_sizes):
                     passing = [
-                        (s, e)
-                        for s, e, v in chrom_intervals[chrom]
-                        if v >= threshold
+                        (s, e) for s, e, v in chrom_intervals[chrom] if v >= threshold
                     ]
                     for start, end in _merge_intervals(passing):
                         out_bed.write(f"{chrom}\t{start}\t{end}\n")
