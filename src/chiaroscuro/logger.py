@@ -3,7 +3,7 @@
 
 """
 Contains Logger, a class that saves/prints training and validation metrics
-More or less copied from bpnet-lite v0.8.1
+More or less copied from bpnet-lite v0.8.1 to reduce dependencies.
 """
 
 import pandas as pd
@@ -11,6 +11,8 @@ import pandas as pd
 
 class Logger:
     """
+    Class copied from bpnet-lite v0.8.1 by Jacob Schreiber under MIT license.
+
     A logging class that can report or save metrics.
 
     This class contains a simple utility for saving statistics as they are

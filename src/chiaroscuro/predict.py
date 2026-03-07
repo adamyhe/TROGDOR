@@ -1,5 +1,5 @@
 # predict.py
-# Contact: Jacob Schreiber <jmschreiber91@gmail.com>
+# Author: Adam He <adamyhe@gmail.com>
 
 """
 The predict function is copied from tangermeme v1.0.2 by Jacob Schreiber to reduce

@@ -44,7 +44,6 @@ MAX_EPOCHS = 25
 WARMUP_STEPS = 500
 BATCH_SIZE = 64
 EARLY_STOPPING = 5
-LEARNING_RATE = args.lr
 WEIGHT_DECAY = 1e-4
 
 # --- Training datasets ---
@@ -86,20 +85,16 @@ val_loader = torch.utils.data.DataLoader(
 
 # --- Loss function ---
 if args.pos_weight is not None:
-    loss_fn = torch.nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([args.pos_weight])
-    )
+    loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([args.pos_weight]))
 else:
     loss_fn = None  # use TROGDOR default (BCEWithLogitsLoss with no reweighting)
 
 # --- Model + optimizer ---
 
 model = TROGDOR(
-    name=f"{MODEL_DIR}/TROGDOR_BCE_{args.pos_weight}", loss_fn=loss_fn
+    name=f"{MODEL_DIR}/TROGDOR_BCE_{args.pos_weight}_{args.lr}", loss_fn=loss_fn
 ).cuda()
-optimizer = torch.optim.AdamW(
-    model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
-)
+optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
 
 # --- LR schedule: linear warmup + cosine decay ---
 total_steps = MAX_EPOCHS * len(train_loader)
@@ -123,7 +118,7 @@ run = wandb.init(
         "train_samples": TRAIN_SAMPLES,
         "val_samples": VAL_SAMPLES,
         "batch_size": BATCH_SIZE,
-        "lr": LEARNING_RATE,
+        "lr": args.lr,
         "weight_decay": WEIGHT_DECAY,
         "max_epochs": MAX_EPOCHS,
         "early_stopping": EARLY_STOPPING,
