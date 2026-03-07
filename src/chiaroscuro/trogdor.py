@@ -16,7 +16,7 @@ from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
 from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
-from .predict import predict
+
 
 torch.backends.cudnn.benchmark = True
 
@@ -261,6 +261,8 @@ class TROGDOR(torch.nn.Module):
 
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
                     logits = self(X)
+                    if isinstance(_fn, torch.nn.Module):
+                        _fn.to(logits.device)
                     loss = _fn(logits, y)
 
                 loss.backward()
@@ -293,15 +295,11 @@ class TROGDOR(torch.nn.Module):
                     y_val = []
                     logits_val = []
                     for X_val, y_val_ in val_data:
-                        logits_val_ = predict(
-                            self,
-                            X_val,
-                            batch_size=batch_size,
-                            device="cuda",
-                            dtype=torch.bfloat16 if bf16 else None,
-                        )
+                        X_val = X_val.cuda()
+                        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
+                            logits_val_ = self(X_val)
                         logits_val.append(logits_val_)
-                        y_val.append(y_val_)
+                        y_val.append(y_val_.cuda())
 
                     y_val = torch.cat(y_val)
                     logits_val = torch.cat(logits_val)

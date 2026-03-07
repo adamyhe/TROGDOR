@@ -22,6 +22,9 @@ parser.add_argument(
     help="Positive class weight for BCEWithLogitsLoss. Upweights positive bins "
     "to compensate for class imbalance. Default: no reweighting.",
 )
+parser.add_argument(
+    "--lr", type=float, default=1e-3, help="Learning rate. Default: 1e-3."
+)
 args = parser.parse_args()
 
 TRAIN_SAMPLES = ["G1", "G2", "G3", "G5"]
@@ -41,7 +44,7 @@ MAX_EPOCHS = 25
 WARMUP_STEPS = 500
 BATCH_SIZE = 64
 EARLY_STOPPING = 5
-LEARNING_RATE = 1e-3
+LEARNING_RATE = args.lr
 WEIGHT_DECAY = 1e-4
 
 # --- Training datasets ---
@@ -84,7 +87,7 @@ val_loader = torch.utils.data.DataLoader(
 # --- Loss function ---
 if args.pos_weight is not None:
     loss_fn = torch.nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([args.pos_weight]).cuda()
+        pos_weight=torch.tensor([args.pos_weight])
     )
 else:
     loss_fn = None  # use TROGDOR default (BCEWithLogitsLoss with no reweighting)
