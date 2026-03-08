@@ -39,7 +39,7 @@ def merge_intervals(intervals):
     return merged
 
 
-def bh_correct(probs):
+def bh_correct(probs, n_total=None):
     """Apply Benjamini–Hochberg correction to an array of probabilities.
 
     Treats each probability ``p`` as ``1 - p_value`` and returns an array of
@@ -49,6 +49,10 @@ def bh_correct(probs):
     ----------
     probs : np.ndarray, shape (m,)
         Raw model probabilities in [0, 1].
+    n_total : int or None
+        Total number of hypothesis tests (genome bins). If None, defaults to
+        len(probs). Pass the genome-wide bin count for proper FDR control when
+        only a pre-filtered subset of bins is supplied.
 
     Returns
     -------
@@ -58,10 +62,12 @@ def bh_correct(probs):
     m = len(probs)
     if m == 0:
         return np.array([])
+    if n_total is None:
+        n_total = m
     p = 1.0 - probs
     sort_idx = np.argsort(p)
     sorted_p = p[sort_idx]
-    raw_q = sorted_p * m / np.arange(1, m + 1)
+    raw_q = sorted_p * n_total / np.arange(1, m + 1)
     q_sorted = np.minimum.accumulate(raw_q[::-1])[::-1]
     q_values = np.empty(m)
     q_values[sort_idx] = q_sorted
