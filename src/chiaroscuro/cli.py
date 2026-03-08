@@ -105,7 +105,7 @@ def cli():
         "--batch_size",
         type=int,
         default=8,
-        help="Number of chunks per forward pass (default: 8)",
+        help="Number of chunks per forward pass (default: 8). Reduce if OOM.",
     )
     parser_pipeline.add_argument(
         "-s",
@@ -124,7 +124,7 @@ def cli():
 
     # =============================================================================
 
-    # score
+    # score (alias: thatch)
     parser_score = subparsers.add_parser(
         "score",
         aliases=["thatch"],
@@ -209,7 +209,7 @@ def cli():
 
     # =============================================================================
 
-    # call peak
+    # call peak (alias: consummate_vs)
     parser_peaks = subparsers.add_parser(
         "peaks",
         aliases=["consummate_vs"],
@@ -234,6 +234,12 @@ def cli():
     parser_peaks.set_defaults(func=cmd_peaks)
 
     # =============================================================================
+
+    _ALIASES = {"burninate", "thatch", "consummate_vs"}
+    subparsers._choices_actions = [
+        a for a in subparsers._choices_actions if a.dest not in _ALIASES
+    ]
+    subparsers.metavar = "{pipeline,score,peaks}"
 
     args = parser.parse_args()
     args.func(args)
