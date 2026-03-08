@@ -105,7 +105,6 @@ def cmd_score(args):
     # Pass 1: score the genome and collect all bins with score >= min_score
     all_intervals = []  # list of (chrom, start, end, prob)
     chrom_dict = {}
-    total_bins = 0
     for chrom, chrom_len, probs in predict_genome(
         model,
         args.pl_bigwig,
@@ -120,7 +119,6 @@ def cmd_score(args):
         verbose=args.verbose,
     ):
         chrom_dict[chrom] = chrom_len
-        total_bins += chrom_len // args.output_stride
         bin_indices = np.where(probs >= args.min_score)[0]
         for i in bin_indices:
             all_intervals.append(
@@ -132,15 +130,14 @@ def cmd_score(args):
                 )
             )
 
-    # Pass 2: BH correction over all collected bins
+    # Pass 2: BH correction over pre-filtered candidates
     all_probs_arr = np.array([v for _, _, _, v in all_intervals])
     m = len(all_probs_arr)
-    q_values = bh_correct(all_probs_arr, n_total=total_bins)
+    q_values = bh_correct(all_probs_arr)
 
     if args.verbose:
         print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) "
-            f"with BH-corrected q-values (n_total={total_bins})"
+            f"Writing {m} candidate bins (score >= {args.min_score}) with BH-corrected q-values"
         )
 
     # Build prob → (1 − q) lookup; on ties keep the highest value
