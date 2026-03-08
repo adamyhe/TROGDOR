@@ -1,5 +1,6 @@
 **/.DS_Store
 **/.vscode
+scripts/benchmark/*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

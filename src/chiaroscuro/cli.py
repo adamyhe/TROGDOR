@@ -232,8 +232,8 @@ def cli():
         "-f",
         "--fdr_threshold",
         type=float,
-        default=0.1,
-        help="BH FDR threshold for reporting peaks (default: 0.1)",
+        default=0.05,
+        help="BH FDR threshold for reporting peaks (default: 0.05)",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
