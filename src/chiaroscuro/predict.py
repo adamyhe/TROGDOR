@@ -8,6 +8,8 @@ across a whole chromosome. predict_genome wraps the predict_chromosome function
 to tile predictions across the whole genome.
 """
 
+import warnings
+
 import numpy as np
 import pybigtools
 import torch
@@ -354,18 +356,16 @@ def predict_genome(
         with torch.no_grad():
             for chrom in chroms_to_score:
                 if chrom not in chrom_sizes:
-                    if verbose:
-                        print(f"Skipping {chrom}: not in bigWig")
+                    warnings.warn(f"Skipping {chrom}: not in bigWig")
                     continue
 
                 chrom_len = chrom_sizes[chrom]
 
                 if chrom_len < chunk_size:
-                    if verbose:
-                        print(
-                            f"Skipping {chrom}: length {chrom_len} bp is shorter than "
-                            f"chunk_size {chunk_size}. Re-run with chunk_size <= {chrom_len} to score it."
-                        )
+                    warnings.warn(
+                        f"Skipping {chrom}: length {chrom_len} bp is shorter than "
+                        f"chunk_size {chunk_size}. Re-run with chunk_size <= {chrom_len} to score it."
+                    )
                     continue
 
                 pl_vals = np.nan_to_num(

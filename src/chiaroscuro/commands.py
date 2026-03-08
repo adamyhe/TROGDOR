@@ -5,7 +5,7 @@ import argparse
 import io
 import shutil
 import subprocess
-import sys
+import warnings
 
 import numpy as np
 import pybigtools
@@ -73,13 +73,13 @@ def cmd_score(args):
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
         if torch.backends.mps.is_available():
-            print("Warning: CUDA not available, falling back to MPS.")
+            warnings.warn("CUDA not available, falling back to MPS.")
             device = "mps"
         else:
-            print("Warning: CUDA not available, falling back to CPU.")
+            warnings.warn("CUDA not available, falling back to CPU.")
             device = "cpu"
     elif device == "mps" and not torch.backends.mps.is_available():
-        print("Warning: MPS not available, falling back to CPU.")
+        warnings.warn("MPS not available, falling back to CPU.")
         device = "cpu"
 
     model = TROGDOR()
@@ -216,10 +216,7 @@ def cmd_peaks(args):
     out_path = args.output
     if out_path.endswith(".gz") and shutil.which("bgzip") is None:
         out_path = out_path[:-3]  # strip .gz
-        print(
-            f"Warning: bgzip not found; writing uncompressed BED to {out_path}",
-            file=sys.stderr,
-        )
+        warnings.warn(f"bgzip not found; writing uncompressed BED to {out_path}")
 
     if out_path.endswith(".gz"):
         with open(out_path, "wb") as raw_out:
