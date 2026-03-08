@@ -112,14 +112,7 @@ def cli():
         "--min_score",
         type=float,
         default=0.9,
-        help="Minimum raw score to include as a candidate bin before BH correction (default: 0.9)",
-    )
-    parser_pipeline.add_argument(
-        "-f",
-        "--fdr_threshold",
-        type=float,
-        default=0.05,
-        help="BH FDR threshold for reporting peaks (default: 0.1)",
+        help="Minimum probability to store/report a bin (default: 0.9)",
     )
     parser_pipeline.add_argument(
         "-v",
@@ -167,7 +160,7 @@ def cli():
         "--name",
         required=True,
         type=str,
-        help="Output filename prefix; produces {name}.prob.bw and {name}.qval.bw",
+        help="Output filename prefix; produces {name}.prob.bw",
     )
     parser_score.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
@@ -207,7 +200,7 @@ def cli():
         "--min_score",
         type=float,
         default=0.9,
-        help="Minimum raw score to include as a candidate bin before BH correction (default: 0.9)",
+        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.9)",
     )
     parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
@@ -229,11 +222,11 @@ def cli():
         "-o", "--output", required=True, type=str, help="Output bed file of peak calls"
     )
     parser_peaks.add_argument(
-        "-f",
-        "--fdr_threshold",
+        "-s",
+        "--min_score",
         type=float,
-        default=0.05,
-        help="BH FDR threshold for reporting peaks (default: 0.05)",
+        default=0.9,
+        help="Minimum probability to report a bin as a peak (default: 0.9)",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"

@@ -3,7 +3,9 @@
 
 import argparse
 import io
+import shutil
 import subprocess
+import sys
 
 import numpy as np
 import pybigtools
@@ -14,7 +16,7 @@ from huggingface_hub import hf_hub_download
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.trogdor import TROGDOR
-from chiaroscuro.utils import bh_correct, merge_intervals
+from chiaroscuro.utils import merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
@@ -22,17 +24,14 @@ HF_MODEL_FILENAME = "TROGDOR.torch"
 
 
 def cmd_score(args):
-    """Run the ``score`` subcommand: genome-wide TIR scoring to two bigWigs.
+    """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
 
     Loads a TROGDOR model (downloading pretrained weights from HuggingFace Hub
     if ``args.model`` is ``None``), slides it across all requested chromosomes,
-    and writes two output bigWigs derived from ``args.name``:
+    and writes one output bigWig derived from ``args.name``:
 
     - ``{name}.prob.bw`` — raw model probabilities for candidate bins
       (raw prob ≥ ``args.min_score``)
-    - ``{name}.qval.bw`` — BH-adjusted scores (``1 − q``) computed globally
-      across all candidate bins; bins that pass FDR threshold ``α`` have
-      values ≥ ``1 − α``
 
     Parameters
     ----------
@@ -46,8 +45,7 @@ def cmd_score(args):
         ``mn_bigwig`` (str)
             Path to the minus-strand coverage bigWig.
         ``name`` (str)
-            Output filename prefix; produces ``{name}.prob.bw`` and
-            ``{name}.qval.bw``.
+            Output filename prefix; produces ``{name}.prob.bw``.
         ``device`` (str)
             PyTorch device string (e.g. ``"cuda"`` or ``"cpu"``).
         ``chunk_size`` (int)
@@ -61,7 +59,8 @@ def cmd_score(args):
         ``batch_size`` (int)
             Number of chunks per forward pass.
         ``min_score`` (float)
-            Pre-filter threshold on raw model probability.
+            Storage threshold; bins with raw prob below this are omitted from
+            the output bigWig.
         ``verbose`` (bool)
             Whether to print progress messages.
     """
@@ -132,14 +131,11 @@ def cmd_score(args):
                 )
             )
 
-    # Pass 2: BH correction over pre-filtered candidates
-    all_probs_arr = np.array([v for _, _, _, v in all_intervals])
-    m = len(all_probs_arr)
-    q_values = bh_correct(all_probs_arr)
+    m = len(all_intervals)
 
     if args.verbose:
         print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) with raw scores to "
+            f"Writing {m} candidate bins (score >= {args.min_score}) to "
             f"{args.name}.prob.bw."
         )
 
@@ -150,33 +146,14 @@ def cmd_score(args):
     out_bw = pybigtools.open(f"{args.name}.prob.bw", "w")
     out_bw.write(chrom_dict, _raw_intervals())
 
-    # Build prob → (1 − q) lookup; on ties keep the lowest q (highest 1-q)
-    prob_to_q = {}
-    for prob, q in zip(all_probs_arr.tolist(), q_values.tolist()):
-        if prob not in prob_to_q or q < prob_to_q[prob]:
-            prob_to_q[prob] = q
-
-    def _fdr_intervals():
-        for chrom, start, end, prob in all_intervals:
-            yield chrom, start, end, 1.0 - prob_to_q[prob]
-
-    if args.verbose:
-        print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) with FDR-corrected "
-            f"scores to {args.name}.qval.bw."
-        )
-
-    fdr_bw = pybigtools.open(f"{args.name}.qval.bw", "w")
-    fdr_bw.write(chrom_dict, _fdr_intervals())
-
 
 def cmd_peaks(args):
     """Run the ``peaks`` subcommand: convert a scored bigWig to BED peak calls.
 
-    Reads the bigWig produced by ``cmd_score`` (whose values are ``1 − q``),
-    applies a score threshold of ``1 − fdr_threshold`` to select passing bins,
-    merges abutting passing bins into peak regions, and writes a BED file with
-    columns ``chrom``, ``start``, ``end``, ``q_value``.
+    Reads ``prob.bw`` produced by ``cmd_score``, applies a direct probability
+    threshold (``args.min_score``) to select passing bins, merges abutting
+    passing bins into peak regions, and writes a BED file with columns
+    ``chrom``, ``start``, ``end``, ``score``.
 
     Output is written as plain text unless ``args.output`` ends with ``".gz"``,
     in which case it is piped through ``bgzip``.
@@ -190,17 +167,15 @@ def cmd_peaks(args):
             Path to the scored bigWig (output of ``cmd_score``).
         ``output`` (str)
             Path for the output BED (or ``.bed.gz``) file.
-        ``fdr_threshold`` (float)
-            BH FDR threshold; bins with score ≥ ``1 − fdr_threshold`` are reported.
+        ``min_score`` (float)
+            Minimum probability to report a bin as a peak.
         ``verbose`` (bool)
             Whether to print progress messages.
     """
     in_bw = pybigtools.open(args.input)
     chrom_sizes = dict(in_bw.chroms())
 
-    # Pass 1: collect all intervals per chrom and aggregate probs for BH
     chrom_intervals = {}
-    all_probs = []
     for chrom, chrom_len in tqdm.tqdm(
         chrom_sizes.items(),
         desc="Loading scores",
@@ -212,15 +187,14 @@ def cmd_peaks(args):
             if not np.isnan(v)
         ]
         chrom_intervals[chrom] = ivals
-        all_probs.extend(v for _, _, v in ivals)
     in_bw.close()
 
-    threshold = 1.0 - args.fdr_threshold
+    threshold = args.min_score
 
     if args.verbose:
-        n_pass = sum(1 for p in all_probs if p >= threshold)
+        n_pass = sum(1 for ivals in chrom_intervals.values() for _, _, v in ivals if v >= threshold)
         if n_pass == 0:
-            print("No bins pass FDR threshold; writing empty BED file")
+            print("No bins pass threshold; writing empty BED file")
         else:
             print(f"Score threshold: {threshold:.6f} ({n_pass} bins pass)")
 
@@ -230,11 +204,18 @@ def cmd_peaks(args):
                 (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
             ]
             for start, end, max_v in merge_intervals(passing):
-                q = 1.0 - max_v
-                out_bed.write(f"{chrom}\t{start}\t{end}\t{q:.6g}\n")
+                out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
 
-    if args.output.endswith(".gz"):
-        with open(args.output, "wb") as raw_out:
+    out_path = args.output
+    if out_path.endswith(".gz") and shutil.which("bgzip") is None:
+        out_path = out_path[:-3]  # strip .gz
+        print(
+            f"Warning: bgzip not found; writing uncompressed BED to {out_path}",
+            file=sys.stderr,
+        )
+
+    if out_path.endswith(".gz"):
+        with open(out_path, "wb") as raw_out:
             proc = subprocess.Popen(["bgzip"], stdin=subprocess.PIPE, stdout=raw_out)
             with io.TextIOWrapper(proc.stdin, encoding="utf-8") as out_bed:
                 _write_peaks(out_bed)
@@ -242,7 +223,7 @@ def cmd_peaks(args):
             if proc.returncode != 0:
                 raise RuntimeError(f"bgzip exited with code {proc.returncode}")
     else:
-        with open(args.output, "w") as out_bed:
+        with open(out_path, "w") as out_bed:
             _write_peaks(out_bed)
 
 
@@ -252,8 +233,7 @@ def cmd_pipeline(args):
     Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
     Output paths are derived from ``args.name``:
 
-    - ``{name}.prob.bw`` — raw score bigWig
-    - ``{name}.qval.bw`` — 1 - q-value (BH-adjusted) bigWig
+    - ``{name}.prob.bw`` — raw model probability bigWig
     - ``{name}.peaks.bed.gz`` — final bgzipped BED of peak calls
 
     Parameters
@@ -265,8 +245,7 @@ def cmd_pipeline(args):
         ``model`` (str or None), ``pl_bigwig`` (str), ``mn_bigwig`` (str),
         ``name`` (str), ``device`` (str), ``chunk_size`` (int),
         ``overlap`` (int), ``output_stride`` (int), ``batch_size`` (int),
-        ``chroms`` (list or None), ``min_score`` (float),
-        ``fdr_threshold`` (float), ``verbose`` (bool).
+        ``chroms`` (list or None), ``min_score`` (float), ``verbose`` (bool).
     """
     cmd_score(
         argparse.Namespace(
@@ -286,9 +265,9 @@ def cmd_pipeline(args):
     )
     cmd_peaks(
         argparse.Namespace(
-            input=f"{args.name}.qval.bw",
+            input=f"{args.name}.prob.bw",
             output=f"{args.name}.peaks.bed.gz",
-            fdr_threshold=args.fdr_threshold,
+            min_score=args.min_score,
             verbose=args.verbose,
         )
     )
