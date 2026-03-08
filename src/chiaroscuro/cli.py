@@ -118,7 +118,7 @@ def cli():
         "-f",
         "--fdr_threshold",
         type=float,
-        default=0.1,
+        default=0.05,
         help="BH FDR threshold for reporting peaks (default: 0.1)",
     )
     parser_pipeline.add_argument(
