@@ -7,7 +7,7 @@ parsing works correctly and that the subcommands are wired up.
 import numpy as np
 import pytest
 
-from chiaroscuro.cli import _bh_threshold, _merge_intervals
+from chiaroscuro.utils import merge_intervals
 
 # We import the argparse-building code via a direct call to avoid needing
 # installed entry points or a TROGDOR_UNET.torch weights file.
@@ -374,47 +374,20 @@ class TestPipelineArgParsing:
 
 
 class TestPeaksHelpers:
-    # _bh_threshold tests
-
-    def test_bh_all_pass(self):
-        """All-ones probability array → every bin passes BH at alpha=0.05."""
-        probs = np.ones(10)
-        t = _bh_threshold(probs, 0.05)
-        assert t is not None
-        assert all(p >= t for p in probs)
-
-    def test_bh_none_pass(self):
-        """All-zeros probability array → no bin passes; returns None."""
-        probs = np.zeros(10)
-        assert _bh_threshold(probs, 0.05) is None
-
-    def test_bh_empty(self):
-        """Empty array → no bins to test; returns None."""
-        assert _bh_threshold(np.array([]), 0.05) is None
-
-    def test_bh_partial(self):
-        """Only the highest-probability bin passes BH; threshold equals that probability."""
-        # 4 bins: probs 0.99, 0.8, 0.6, 0.01 → p-values 0.01, 0.2, 0.4, 0.99
-        # sorted p: [0.01, 0.2, 0.4, 0.99]; BH thresholds at alpha=0.05: [0.0125, 0.025, 0.0375, 0.05]
-        # Only rank 1 passes (0.01 <= 0.0125); highest passing sorted_p = 0.01 → threshold = 0.99
-        probs = np.array([0.99, 0.8, 0.6, 0.01])
-        t = _bh_threshold(probs, 0.05)
-        assert t == pytest.approx(0.99)
-
-    # _merge_intervals tests
+    # merge_intervals tests
 
     def test_merge_adjacent(self):
         """Directly adjacent intervals must be merged into one."""
-        assert _merge_intervals([(0, 16), (16, 32), (32, 48)]) == [(0, 48)]
+        assert merge_intervals([(0, 16, 0.9), (16, 32, 0.8), (32, 48, 0.7)]) == [[0, 48, 0.9]]
 
     def test_merge_gap(self):
         """Intervals separated by a gap must remain distinct."""
-        assert _merge_intervals([(0, 16), (32, 48)]) == [(0, 16), (32, 48)]
+        assert merge_intervals([(0, 16, 0.9), (32, 48, 0.8)]) == [[0, 16, 0.9], [32, 48, 0.8]]
 
     def test_merge_empty(self):
         """Empty input list must return an empty list."""
-        assert _merge_intervals([]) == []
+        assert merge_intervals([]) == []
 
     def test_merge_single(self):
         """A single interval must be returned as-is."""
-        assert _merge_intervals([(0, 16)]) == [(0, 16)]
+        assert merge_intervals([(0, 16, 0.9)]) == [[0, 16, 0.9]]
