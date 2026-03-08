@@ -40,7 +40,7 @@ def parse_args():
     p.add_argument("--overlap", type=int, default=32768, help="Edge overlap in bp (default: 32768)")
     p.add_argument("--output_stride", type=int, default=16, help="Output stride (default: 16)")
     p.add_argument("--chroms", nargs="+", default=None, help="Chromosome whitelist")
-    p.add_argument("--batch_size", type=int, default=64, help="Number of chunks per forward pass (default: 64)")
+    p.add_argument("--batch_size", type=int, default=8, help="Number of chunks per forward pass (default: 8)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args()
 

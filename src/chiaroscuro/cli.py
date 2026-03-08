@@ -104,8 +104,8 @@ def cli():
     parser_pipeline.add_argument(
         "--batch_size",
         type=int,
-        default=64,
-        help="Number of chunks per forward pass (default: 64)",
+        default=8,
+        help="Number of chunks per forward pass (default: 8)",
     )
     parser_pipeline.add_argument(
         "-s",
@@ -194,8 +194,8 @@ def cli():
     parser_score.add_argument(
         "--batch_size",
         type=int,
-        default=64,
-        help="Number of chunks per forward pass (default: 64)",
+        default=8,
+        help="Number of chunks per forward pass (default: 8)",
     )
     parser_score.add_argument(
         "-s",

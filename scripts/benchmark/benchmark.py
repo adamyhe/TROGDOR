@@ -45,8 +45,8 @@ def parse_args():
     p.add_argument(
         "--batch_size",
         type=int,
-        default=64,
-        help="Number of chunks per forward pass (default: 64)",
+        default=8,
+        help="Number of chunks per forward pass (default: 8)",
     )
     p.add_argument(
         "--standardization",
