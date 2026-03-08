@@ -213,7 +213,7 @@ def cli():
     parser_peaks = subparsers.add_parser(
         "peaks",
         aliases=["consummate_vs"],
-        help="Call peaks from the tracks predicted by the refine method",
+        help="Call peaks from the predicted probability output of a TROGDOR model",
     )
     parser_peaks.add_argument(
         "-i", "--input", required=True, type=str, help="bigWig file of TROGDOR scores"
