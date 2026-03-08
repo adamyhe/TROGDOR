@@ -102,6 +102,12 @@ def cli():
         help="Chromosomes to score (default: all chromosomes in the bigWig)",
     )
     parser_pipeline.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Number of chunks per forward pass (default: 64)",
+    )
+    parser_pipeline.add_argument(
         "-s",
         "--min_score",
         type=float,
@@ -184,6 +190,12 @@ def cli():
         nargs="*",
         default=None,
         help="Chromosomes to score (default: all chromosomes in the bigWig)",
+    )
+    parser_score.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Number of chunks per forward pass (default: 64)",
     )
     parser_score.add_argument(
         "-s",

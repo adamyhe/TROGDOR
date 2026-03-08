@@ -40,11 +40,12 @@ def parse_args():
     p.add_argument("--overlap", type=int, default=32768, help="Edge overlap in bp (default: 32768)")
     p.add_argument("--output_stride", type=int, default=16, help="Output stride (default: 16)")
     p.add_argument("--chroms", nargs="+", default=None, help="Chromosome whitelist")
+    p.add_argument("--batch_size", type=int, default=64, help="Number of chunks per forward pass (default: 64)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args()
 
 
-def run_chunks(model, signal, chunk_size, overlap, output_stride, device, transform):
+def run_chunks(model, signal, chunk_size, overlap, output_stride, batch_size, device, transform):
     """Run inference on all chunks of a chromosome.
 
     Replicates the chunk-building logic from predict_chromosome but returns
@@ -74,7 +75,7 @@ def run_chunks(model, signal, chunk_size, overlap, output_stride, device, transf
     X_all = torch.stack(chunks)  # (n_chunks, 2, chunk_size)
 
     # Batched inference — returns (n_chunks, 1, out_chunk) on CPU
-    preds = predict(model, X_all, device=device, verbose=False)
+    preds = predict(model, X_all, batch_size=batch_size, device=device, verbose=False)
     preds = torch.sigmoid(preds).squeeze(1).numpy()  # (n_chunks, out_chunk)
 
     out_chunk = chunk_size // output_stride
@@ -156,6 +157,7 @@ def main():
                     chunk_size=chunk_size,
                     overlap=overlap,
                     output_stride=output_stride,
+                    batch_size=args.batch_size,
                     device=args.device,
                     transform=normalization,
                 )

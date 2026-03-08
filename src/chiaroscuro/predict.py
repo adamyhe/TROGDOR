@@ -181,7 +181,7 @@ def predict_chromosome(
     chunk_size=262144,
     overlap=32768,
     output_stride=16,
-    batch_size=8,
+    batch_size=64,
     device="cuda",
     transform=None,
     dtype="auto",
@@ -303,6 +303,7 @@ def predict_genome(
     output_stride=16,
     chunk_size=262144,
     overlap=32768,
+    batch_size=64,
     transform=None,
     device="cuda",
     verbose=False,
@@ -329,6 +330,8 @@ def predict_genome(
         Input chunk length. Default 262144.
     overlap : int
         Edge overlap in input positions. Default 32768.
+    batch_size : int
+        Number of chunks per forward pass. Default 8.
     transform : callable or None
         Per-chunk transform applied before inference. Default None.
     device : str
@@ -381,6 +384,7 @@ def predict_genome(
                     chunk_size=chunk_size,
                     overlap=overlap,
                     output_stride=output_stride,
+                    batch_size=batch_size,
                     device=device,
                     desc=f"Scoring {chrom} ({chrom_len} bp)",
                     transform=transform,

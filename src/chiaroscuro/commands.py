@@ -56,6 +56,8 @@ def cmd_score(args):
             Model output resolution in bp.
         ``chroms`` (list of str or None)
             Chromosomes to score; ``None`` scores all shared chromosomes.
+        ``batch_size`` (int)
+            Number of chunks per forward pass.
         ``min_score`` (float)
             Pre-filter threshold on raw model probability.
         ``verbose`` (bool)
@@ -111,6 +113,7 @@ def cmd_score(args):
         output_stride=args.output_stride,
         chunk_size=args.chunk_size,
         overlap=args.overlap,
+        batch_size=args.batch_size,
         transform=normalization,
         device=device,
         verbose=args.verbose,
@@ -247,8 +250,9 @@ def cmd_pipeline(args):
 
         ``model`` (str or None), ``pl_bigwig`` (str), ``mn_bigwig`` (str),
         ``name`` (str), ``device`` (str), ``chunk_size`` (int),
-        ``overlap`` (int), ``output_stride`` (int), ``chroms`` (list or None),
-        ``min_score`` (float), ``fdr_threshold`` (float), ``verbose`` (bool).
+        ``overlap`` (int), ``output_stride`` (int), ``batch_size`` (int),
+        ``chroms`` (list or None), ``min_score`` (float),
+        ``fdr_threshold`` (float), ``verbose`` (bool).
     """
     cmd_score(
         argparse.Namespace(
@@ -260,6 +264,7 @@ def cmd_pipeline(args):
             chunk_size=args.chunk_size,
             overlap=args.overlap,
             output_stride=args.output_stride,
+            batch_size=args.batch_size,
             chroms=args.chroms,
             min_score=args.min_score,
             verbose=args.verbose,

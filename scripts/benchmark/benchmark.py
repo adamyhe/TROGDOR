@@ -43,6 +43,12 @@ def parse_args():
         help="Chromosome whitelist (default: all in bigWig)",
     )
     p.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Number of chunks per forward pass (default: 64)",
+    )
+    p.add_argument(
         "--standardization",
         action="store_true",
         help="Use the deprecated global-max standardization instead of per-strand normalization",
@@ -78,6 +84,7 @@ def main():
         args.mn_bigwig,
         chroms=args.chroms,
         output_stride=args.output_stride,
+        batch_size=args.batch_size,
         transform=transform,
         device=args.device,
         verbose=args.verbose,
