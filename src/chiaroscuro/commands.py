@@ -66,9 +66,7 @@ def cmd_score(args):
     model_path = args.model
     if model_path is None:
         if args.verbose:
-            print(
-                f"No model specified — downloading default weights from {HF_REPO_ID}..."
-            )
+            print(f"No model specified — using pretrained weights from {HF_REPO_ID}...")
         model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
