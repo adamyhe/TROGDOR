@@ -22,7 +22,6 @@ HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
 
 
-
 def cmd_score(args):
     """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
 
@@ -192,19 +191,27 @@ def cmd_peaks(args):
     threshold = args.min_score
 
     if args.verbose:
-        n_pass = sum(1 for ivals in chrom_intervals.values() for _, _, v in ivals if v >= threshold)
+        n_pass = sum(
+            1
+            for ivals in chrom_intervals.values()
+            for _, _, v in ivals
+            if v >= threshold
+        )
         if n_pass == 0:
             print("No bins pass threshold; writing empty BED file")
         else:
             print(f"Score threshold: {threshold:.6f} ({n_pass} bins pass)")
 
     def _write_peaks(out_bed):
+        n = 0
         for chrom in sorted(chrom_sizes):
             passing = [
                 (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
             ]
             for start, end, max_v in merge_intervals(passing):
                 out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
+                n += 1
+        return n
 
     out_path = args.output
     if out_path.endswith(".gz") and shutil.which("bgzip") is None:
@@ -218,13 +225,16 @@ def cmd_peaks(args):
         with open(out_path, "wb") as raw_out:
             proc = subprocess.Popen(["bgzip"], stdin=subprocess.PIPE, stdout=raw_out)
             with io.TextIOWrapper(proc.stdin, encoding="utf-8") as out_bed:
-                _write_peaks(out_bed)
+                n_peaks = _write_peaks(out_bed)
             proc.wait()
             if proc.returncode != 0:
                 raise RuntimeError(f"bgzip exited with code {proc.returncode}")
     else:
         with open(out_path, "w") as out_bed:
-            _write_peaks(out_bed)
+            n_peaks = _write_peaks(out_bed)
+
+    if args.verbose:
+        print(f"{n_peaks} peaks written to {out_path}")
 
 
 def cmd_pipeline(args):
