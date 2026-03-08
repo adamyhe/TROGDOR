@@ -14,38 +14,11 @@ from huggingface_hub import hf_hub_download
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.trogdor import TROGDOR
+from chiaroscuro.utils import bh_correct, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
 
-
-def _merge_intervals(intervals):
-    """Merge abutting intervals, keeping the max value across merged spans.
-
-    Expects ``intervals`` to be a sorted list of ``(start, end, value)`` tuples
-    where adjacent intervals share an endpoint (``prev_end == next_start``).
-    Overlapping intervals are not expected and not handled.
-
-    Parameters
-    ----------
-    intervals : list of (int, int, float)
-        Sorted (start, end, value) tuples.
-
-    Returns
-    -------
-    list of [int, int, float]
-        Merged intervals as mutable lists.
-    """
-    if not intervals:
-        return []
-    merged = [list(intervals[0])]
-    for s, e, v in intervals[1:]:
-        if s == merged[-1][1]:
-            merged[-1][1] = e
-            merged[-1][2] = max(merged[-1][2], v)
-        else:
-            merged.append([s, e, v])
-    return merged
 
 
 def cmd_score(args):
@@ -157,16 +130,7 @@ def cmd_score(args):
     # Pass 2: BH correction over all collected bins
     all_probs_arr = np.array([v for _, _, _, v in all_intervals])
     m = len(all_probs_arr)
-    if m > 0:
-        p = 1.0 - all_probs_arr
-        sort_idx = np.argsort(p)
-        sorted_p = p[sort_idx]
-        raw_q = sorted_p * m / np.arange(1, m + 1)
-        q_sorted = np.minimum.accumulate(raw_q[::-1])[::-1]
-        q_values = np.empty(m)
-        q_values[sort_idx] = q_sorted
-    else:
-        q_values = np.array([])
+    q_values = bh_correct(all_probs_arr)
 
     if args.verbose:
         print(
@@ -249,7 +213,7 @@ def cmd_peaks(args):
             passing = [
                 (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
             ]
-            for start, end, max_v in _merge_intervals(passing):
+            for start, end, max_v in merge_intervals(passing):
                 q = 1.0 - max_v
                 out_bed.write(f"{chrom}\t{start}\t{end}\t{q:.6g}\n")
 

@@ -57,6 +57,8 @@ trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.01
 
 ## Installation
 
+We recommend installing inside an isolated Python environment (conda, venv, or uv):
+
 ```bash
 pip install git@github.com:adamyhe/TROGDOR.git
 ```

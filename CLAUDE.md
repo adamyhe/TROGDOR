@@ -42,6 +42,7 @@ Short contigs shorter than `--chunk_size` (default 262144) are automatically ski
 
 - `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
 - `src/chiaroscuro/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
+- `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `bh_correct()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
@@ -71,3 +72,17 @@ Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normal
 
 `standardization()` is a deprecated alias for the original global-max-based version.
 
+## Development
+
+All Python commands, import checks, and CLI invocations must be run inside the
+`trogdor` conda environment:
+
+```bash
+conda run -n trogdor <command>
+```
+
+Examples:
+```bash
+conda run -n trogdor python -c "from chiaroscuro.utils import bh_correct; print('OK')"
+conda run -n trogdor trogdor score --help
+```

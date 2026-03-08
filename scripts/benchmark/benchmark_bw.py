@@ -24,6 +24,8 @@ import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
 
+from chiaroscuro.utils import encode_labels
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -47,21 +49,6 @@ def parse_args():
         "-v", "--verbose", action="store_true", help="Print per-chromosome progress"
     )
     return p.parse_args()
-
-
-def encode_labels(peaks_df, chrom, chrom_len, output_stride):
-    """Return a float32 binary array of length chrom_len // output_stride."""
-    n_bins = chrom_len // output_stride
-    labels = np.zeros(n_bins, dtype=np.float32)
-    chrom_peaks = peaks_df[peaks_df["chrom"] == chrom]
-    for _, row in chrom_peaks.iterrows():
-        start_bin = int(row["start"]) // output_stride
-        end_bin = (int(row["end"]) - 1) // output_stride + 1
-        start_bin = max(0, start_bin)
-        end_bin = min(n_bins, end_bin)
-        if start_bin < end_bin:
-            labels[start_bin:end_bin] = 1.0
-    return labels
 
 
 def bin_probs(raw, output_stride):

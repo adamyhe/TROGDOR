@@ -16,7 +16,7 @@ from torcheval.metrics.functional import binary_auprc, binary_auroc
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
 from chiaroscuro.data_transforms import normalization, standardization
 from chiaroscuro.predict import predict_genome
-from chiaroscuro.trogdor import TROGDOR
+from chiaroscuro.utils import encode_labels, load_model
 
 
 def parse_args():
@@ -52,28 +52,6 @@ def parse_args():
     )
     return p.parse_args()
 
-
-def load_model(path, device):
-    model = TROGDOR(verbose=False)
-    state = torch.load(path, weights_only=True, map_location="cpu")
-    model.load_state_dict(state, strict=False)
-    model = model.to(device).eval()
-    return model
-
-
-def encode_labels(peaks_df, chrom, chrom_len, output_stride):
-    """Return a float32 binary array of length chrom_len // output_stride."""
-    n_bins = chrom_len // output_stride
-    labels = np.zeros(n_bins, dtype=np.float32)
-    chrom_peaks = peaks_df[peaks_df["chrom"] == chrom]
-    for _, row in chrom_peaks.iterrows():
-        start_bin = int(row["start"]) // output_stride
-        end_bin = (int(row["end"]) - 1) // output_stride + 1
-        start_bin = max(0, start_bin)
-        end_bin = min(n_bins, end_bin)
-        if start_bin < end_bin:
-            labels[start_bin:end_bin] = 1.0
-    return labels
 
 
 def main():
