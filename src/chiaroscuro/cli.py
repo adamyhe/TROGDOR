@@ -16,22 +16,17 @@ outputs imputed transcription initiation sites.
 
 import argparse
 
-import numpy as np
-import pybigtools
-import torch
-
-from burninate.predict import predict_chromosome
-from burninate.trogdor import load_pretrained_model, standardization
+from chiaroscuro.commands import cmd_peaks, cmd_pipeline, cmd_score
 
 _help = """
 The following commands are available:
-    pipeline  Run the full TROGDOR pipeline from raw data to peak calls
-    score     Score positions using a pre-trained TROGDOR model
-    call      Call peaks from scored positions
+    pipeline / burninate      Run the full TROGDOR pipeline from raw data to peak calls
+    score / thatch            Score positions using a pre-trained TROGDOR model
+    peaks / consummate_vs     Call peaks from scored positions
 """
 
 
-def chiaroscuro():
+def cli():
     # Create argument parser
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,9 +36,22 @@ def chiaroscuro():
 
     # =============================================================================
 
-    # pipeline
+    # pipeline (alias: burninate)
     parser_pipeline = subparsers.add_parser(
-        "pipeline", help="Run the full TROGDOR pipeline from raw data to peak calls"
+        "pipeline",
+        aliases=["burninate"],
+        help="Run the full TROGDOR pipeline from raw data to peak calls",
+    )
+    parser_pipeline.add_argument(
+        "-M",
+        "--model",
+        required=False,
+        default=None,
+        type=str,
+        help=(
+            "Path to a TROGDOR model state dict (.torch). If omitted, the default "
+            "pretrained weights are downloaded from HuggingFace Hub and cached locally."
+        ),
     )
     parser_pipeline.add_argument(
         "-p",
@@ -60,10 +68,51 @@ def chiaroscuro():
         help="bigWig file of nascent RNA sequencing data (minus strand)",
     )
     parser_pipeline.add_argument(
-        "-o", "--output", required=True, type=str, help="Output bed file of peak calls"
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="Output filename prefix for scores bigWig and peak calls.",
     )
     parser_pipeline.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
+    )
+    parser_pipeline.add_argument(
+        "--chunk_size",
+        type=int,
+        default=262144,
+        help="Length of each input chunk fed to the model (default: 262144 = 2^18)",
+    )
+    parser_pipeline.add_argument(
+        "--overlap",
+        type=int,
+        default=32768,
+        help="Input positions whose output bins are trimmed from each chunk edge (default: 32768 = 2^15)",
+    )
+    parser_pipeline.add_argument(
+        "--output_stride",
+        type=int,
+        default=16,
+        help="Output resolution in bp (default: 16). Must be a power of 2.",
+    )
+    parser_pipeline.add_argument(
+        "--chroms",
+        nargs="*",
+        default=None,
+        help="Chromosomes to score (default: all chromosomes in the bigWig)",
+    )
+    parser_pipeline.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help="Number of chunks per forward pass (default: 8). Reduce if OOM.",
+    )
+    parser_pipeline.add_argument(
+        "-s",
+        "--min_score",
+        type=float,
+        default=0.9,
+        help="Minimum probability to store/report a bin (default: 0.9)",
     )
     parser_pipeline.add_argument(
         "-v",
@@ -71,20 +120,26 @@ def chiaroscuro():
         action="store_true",
         help="Whether to print progress statements",
     )
+    parser_pipeline.set_defaults(func=cmd_pipeline)
 
     # =============================================================================
 
-    # score
+    # score (alias: thatch)
     parser_score = subparsers.add_parser(
-        "score", help="Score positions using a pre-trained TROGDOR model"
+        "score",
+        aliases=["thatch"],
+        help="Score positions using a pre-trained TROGDOR model",
     )
     parser_score.add_argument(
-        "-i",
-        "--input",
+        "-M",
+        "--model",
         required=False,
         default=None,
         type=str,
-        help="Input BED file of genomic positions (optional; ignored for dense scoring)",
+        help=(
+            "Path to a TROGDOR model state dict (.torch). If omitted, the default "
+            "pretrained weights are downloaded from HuggingFace Hub and cached locally."
+        ),
     )
     parser_score.add_argument(
         "-p",
@@ -101,7 +156,11 @@ def chiaroscuro():
         help="bigWig file of nascent RNA sequencing data (minus strand)",
     )
     parser_score.add_argument(
-        "-o", "--output", required=True, type=str, help="Output bigWig file of scores"
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="Output filename prefix; produces {name}.prob.bw",
     )
     parser_score.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
@@ -131,108 +190,60 @@ def chiaroscuro():
         help="Chromosomes to score (default: all chromosomes in the bigWig)",
     )
     parser_score.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help="Number of chunks per forward pass (default: 8)",
+    )
+    parser_score.add_argument(
+        "-s",
+        "--min_score",
+        type=float,
+        default=0.9,
+        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.9)",
+    )
+    parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
+    parser_score.set_defaults(func=cmd_score)
 
     # =============================================================================
 
-    # call peak
+    # call peak (alias: consummate_vs)
     parser_peaks = subparsers.add_parser(
-        "peaks", help="Call peaks from the tracks predicted by the refine method"
+        "peaks",
+        aliases=["consummate_vs"],
+        help="Call peaks from the predicted probability scores of a TROGDOR model",
     )
     parser_peaks.add_argument(
-        "-t", "--input", required=True, type=str, help="bigWig file of TROGDOR scores"
+        "-i", "--input", required=True, type=str, help="bigWig file of TROGDOR scores"
     )
     parser_peaks.add_argument(
         "-o", "--output", required=True, type=str, help="Output bed file of peak calls"
     )
     parser_peaks.add_argument(
-        "-f",
-        "--fdr_threshold",
+        "-s",
+        "--min_score",
         type=float,
-        default=0.05,
-        help="BH FDR threshold for reporting peaks (default: 0.05)",
+        default=0.9,
+        help="Minimum probability to report a bin as a peak (default: 0.9)",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
+    parser_peaks.set_defaults(func=cmd_peaks)
 
     # =============================================================================
 
-    # Load args
+    _ALIASES = {"burninate", "thatch", "consummate_vs"}
+    subparsers._choices_actions = [
+        a for a in subparsers._choices_actions if a.dest not in _ALIASES
+    ]
+    subparsers.metavar = "{pipeline,score,peaks}"
+
     args = parser.parse_args()
-
-    # Run provided command
-    if args.cmd == "score":
-        model = load_pretrained_model()
-        model = model.to(args.device).eval()
-
-        pl_bw = pybigtools.open(args.pl_bigwig)
-        mn_bw = pybigtools.open(args.mn_bigwig)
-
-        chrom_sizes = dict(pl_bw.chroms())
-
-        chroms_to_score = args.chroms if args.chroms is not None else list(chrom_sizes.keys())
-
-        # Build output bigWig header
-        out_header = [(c, chrom_sizes[c]) for c in chroms_to_score if c in chrom_sizes]
-
-        out_bw = pybigtools.open(args.output, "w")
-        out_bw.write_header(out_header)
-
-        for chrom in chroms_to_score:
-            if chrom not in chrom_sizes:
-                if args.verbose:
-                    print(f"Skipping {chrom}: not in bigWig")
-                continue
-
-            chrom_len = chrom_sizes[chrom]
-
-            if args.verbose:
-                print(f"Scoring {chrom} ({chrom_len} bp)...")
-
-            pl_vals = np.nan_to_num(
-                np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-            )
-            mn_vals = np.nan_to_num(
-                np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
-            )
-
-            signal = torch.from_numpy(np.stack([pl_vals, mn_vals])).float()
-            signal = standardization(signal)
-
-            logits = predict_chromosome(
-                model,
-                signal,
-                chunk_size=args.chunk_size,
-                overlap=args.overlap,
-                output_stride=args.output_stride,
-                device=args.device,
-            )
-
-            probs = torch.sigmoid(logits).squeeze(0).numpy()  # (chrom_len // output_stride,)
-
-            # Write non-zero values as intervals; each bin i maps to [i*output_stride, (i+1)*output_stride)
-            bin_indices = np.where(probs > 0)[0]
-            if len(bin_indices) > 0:
-                starts = (bin_indices * args.output_stride).tolist()
-                ends = ((bin_indices + 1) * args.output_stride).tolist()
-                values = probs[bin_indices].tolist()
-                out_bw.add_intervals(chrom, starts, ends, values)
-
-        pl_bw.close()
-        mn_bw.close()
-        out_bw.close()
-
-    elif args.cmd == "peaks":
-        pass
-
-    elif args.cmd == "pipeline":
-        pass
-
-    else:
-        raise ValueError(_help)
+    args.func(args)
 
 
 if __name__ == "__main__":
-    chiaroscuro()
+    cli()

@@ -4,8 +4,10 @@ These do not invoke actual model inference; they only check that argument
 parsing works correctly and that the subcommands are wired up.
 """
 
-import sys
+import numpy as np
 import pytest
+
+from chiaroscuro.utils import merge_intervals
 
 # We import the argparse-building code via a direct call to avoid needing
 # installed entry points or a TROGDOR_UNET.torch weights file.
@@ -55,104 +57,248 @@ class TestScoreArgParsing:
         return _make_parser()
 
     def test_minimal_required_args(self, parser):
-        args = parser.parse_args([
-            "score",
-            "-p", "plus.bw",
-            "-m", "minus.bw",
-            "-o", "out.bw",
-        ])
+        """Minimal required flags parse correctly and set cmd='score'."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "plus.bw",
+                "-m",
+                "minus.bw",
+                "-o",
+                "out.bw",
+            ]
+        )
         assert args.cmd == "score"
         assert args.pl_bigwig == "plus.bw"
         assert args.mn_bigwig == "minus.bw"
         assert args.output == "out.bw"
 
     def test_input_is_optional(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """Omitting -i/--input must leave args.input as None."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.input is None
 
     def test_input_can_be_provided(self, parser):
-        args = parser.parse_args([
-            "score", "-i", "infp.bed", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """-i/--input stores the provided path when given."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-i",
+                "infp.bed",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.input == "infp.bed"
 
     def test_chunk_size_default(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """chunk_size defaults to 262144 (2^18) when not specified."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.chunk_size == 262144
 
     def test_chunk_size_custom(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-            "--chunk_size", "8192",
-        ])
+        """--chunk_size stores the provided integer value."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "--chunk_size",
+                "8192",
+            ]
+        )
         assert args.chunk_size == 8192
 
     def test_overlap_default(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """overlap defaults to 32768 (2^15) when not specified."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.overlap == 32768
 
     def test_overlap_custom(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-            "--overlap", "256",
-        ])
+        """--overlap stores the provided integer value."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "--overlap",
+                "256",
+            ]
+        )
         assert args.overlap == 256
 
     def test_output_stride_default(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """output_stride defaults to 16 when not specified."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.output_stride == 16
 
     def test_output_stride_custom(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-            "--output_stride", "32",
-        ])
+        """--output_stride stores the provided integer value."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "--output_stride",
+                "32",
+            ]
+        )
         assert args.output_stride == 32
 
     def test_chroms_default_is_none(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """Omitting --chroms must leave args.chroms as None (score all chromosomes)."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.chroms is None
 
     def test_chroms_single(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-            "--chroms", "chr1",
-        ])
+        """--chroms with one value produces a single-element list."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "--chroms",
+                "chr1",
+            ]
+        )
         assert args.chroms == ["chr1"]
 
     def test_chroms_multiple(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-            "--chroms", "chr1", "chr2", "chrX",
-        ])
+        """--chroms accepts multiple space-separated chromosome names."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "--chroms",
+                "chr1",
+                "chr2",
+                "chrX",
+            ]
+        )
         assert args.chroms == ["chr1", "chr2", "chrX"]
 
     def test_device_default(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw",
-        ])
+        """device defaults to 'cuda' when not specified."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+            ]
+        )
         assert args.device == "cuda"
 
     def test_device_cpu(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw", "-d", "cpu",
-        ])
+        """-d cpu overrides the default device."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "-d",
+                "cpu",
+            ]
+        )
         assert args.device == "cpu"
 
     def test_verbose_flag(self, parser):
-        args = parser.parse_args([
-            "score", "-p", "p.bw", "-m", "m.bw", "-o", "o.bw", "-v",
-        ])
+        """-v sets args.verbose to True."""
+        args = parser.parse_args(
+            [
+                "score",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "o.bw",
+                "-v",
+            ]
+        )
         assert args.verbose is True
 
 
@@ -162,23 +308,46 @@ class TestPeaksArgParsing:
         return _make_parser()
 
     def test_required_args(self, parser):
-        args = parser.parse_args([
-            "peaks", "-t", "scores.bw", "-o", "peaks.bed",
-        ])
+        """Required -t/--input and -o/--output parse correctly and set cmd='peaks'."""
+        args = parser.parse_args(
+            [
+                "peaks",
+                "-t",
+                "scores.bw",
+                "-o",
+                "peaks.bed",
+            ]
+        )
         assert args.cmd == "peaks"
         assert args.input == "scores.bw"
         assert args.output == "peaks.bed"
 
     def test_fdr_default(self, parser):
-        args = parser.parse_args([
-            "peaks", "-t", "scores.bw", "-o", "peaks.bed",
-        ])
+        """fdr_threshold defaults to 0.05 when not specified."""
+        args = parser.parse_args(
+            [
+                "peaks",
+                "-t",
+                "scores.bw",
+                "-o",
+                "peaks.bed",
+            ]
+        )
         assert args.fdr_threshold == pytest.approx(0.05)
 
     def test_fdr_custom(self, parser):
-        args = parser.parse_args([
-            "peaks", "-t", "scores.bw", "-o", "peaks.bed", "-f", "0.01",
-        ])
+        """-f/--fdr_threshold stores the provided float value."""
+        args = parser.parse_args(
+            [
+                "peaks",
+                "-t",
+                "scores.bw",
+                "-o",
+                "peaks.bed",
+                "-f",
+                "0.01",
+            ]
+        )
         assert args.fdr_threshold == pytest.approx(0.01)
 
 
@@ -188,8 +357,37 @@ class TestPipelineArgParsing:
         return _make_parser()
 
     def test_required_args(self, parser):
-        args = parser.parse_args([
-            "pipeline", "-p", "p.bw", "-m", "m.bw", "-o", "out.bed",
-        ])
+        """Required flags parse correctly and set cmd='pipeline'."""
+        args = parser.parse_args(
+            [
+                "pipeline",
+                "-p",
+                "p.bw",
+                "-m",
+                "m.bw",
+                "-o",
+                "out.bed",
+            ]
+        )
         assert args.cmd == "pipeline"
         assert args.pl_bigwig == "p.bw"
+
+
+class TestPeaksHelpers:
+    # merge_intervals tests
+
+    def test_merge_adjacent(self):
+        """Directly adjacent intervals must be merged into one."""
+        assert merge_intervals([(0, 16, 0.9), (16, 32, 0.8), (32, 48, 0.7)]) == [[0, 48, 0.9]]
+
+    def test_merge_gap(self):
+        """Intervals separated by a gap must remain distinct."""
+        assert merge_intervals([(0, 16, 0.9), (32, 48, 0.8)]) == [[0, 16, 0.9], [32, 48, 0.8]]
+
+    def test_merge_empty(self):
+        """Empty input list must return an empty list."""
+        assert merge_intervals([]) == []
+
+    def test_merge_single(self):
+        """A single interval must be returned as-is."""
+        assert merge_intervals([(0, 16, 0.9)]) == [[0, 16, 0.9]]

@@ -2,150 +2,23 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-This module defines a neural network predicts TSS from nascent RNA
-sequencing data
+This module defines a neural network that predicts transcription initiation
+regions (TIRs) from nascent RNA sequencing data. This task is framed as an
+image segmentation problem and uses a 1-D U-Net architecture.
 """
 
-import importlib.resources
+import functools
 import math
 import time
 
-import numpy as np
 import torch
-from torch.nn import BCEWithLogitsLoss
 from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
-from .predict import predict
+from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
+
 
 torch.backends.cudnn.benchmark = True
-
-
-def load_pretrained_model(name="TROGDOR_UNET.torch", model_params={}):
-    """
-    Small utility function to load a pre-trained TROGDOR model placed inside
-    of the deployed package.
-    """
-    model = TROGDOR(**model_params)
-    with importlib.resources.path("burninate", name) as path:
-        model.load_state_dict(torch.load(path, weights_only=True))
-    return model
-
-
-def standardization(t, x=0.05, y=0.01):
-    """
-    A logistic standardization function as described in Danko et al. 2015.
-    Given a (2, L) representation of nascent RNA sequencing coverage,
-    squashes values to (0, 1) using a logistic function.
-
-    Parameters
-    ----------
-    t : torch.Tensor
-        A tensor representation of nascent RNA sequencing coverage.
-    x : float, default = 0.05
-        A scaling parameter for the logistic standardization.
-    y : float, default = 0.01
-        A second scaling parameter for the logistic standardization
-
-    Returns
-    ----------
-    F : torch.Tensor
-        A scaled tensor, values squashed to (0, 1)
-    """
-    if torch.max(t) == 0:
-        return torch.zeros_like(t)
-    beta = x * torch.max(t)
-    alpha = (1 / beta) * np.log(1 / y - 1)
-    F = 1 / (1 + torch.exp(-alpha * (t - beta)))
-    return F
-
-
-class Conv1DBlock(torch.nn.Module):
-    """
-    A small class that applies the conv + reduction operation at the core of the
-    Inception module.
-    """
-
-    def __init__(self, in_channels, reduction_channels, out_channels, kernel_size):
-        super(Conv1DBlock, self).__init__()
-        self.reduce = torch.nn.Conv1d(in_channels, reduction_channels, kernel_size=1)
-        self.conv = torch.nn.Conv1d(
-            reduction_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-        )
-        self.bn = torch.nn.BatchNorm1d(out_channels)
-        self.relus = [torch.nn.ReLU(), torch.nn.ReLU()]
-
-    def forward(self, X):
-        return self.relus[1](self.bn(self.conv(self.relus[0](self.reduce(X)))))
-
-
-class DoubleConv1D(torch.nn.Module):
-    """Two rounds of Conv1d (same-pad) -> BN -> ReLU."""
-
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        super(DoubleConv1D, self).__init__()
-        if kernel_size % 2 == 0:
-            raise ValueError("kernel_size must be odd for same-padding.")
-        pad = kernel_size // 2
-        self.block = torch.nn.Sequential(
-            torch.nn.Conv1d(
-                in_channels, out_channels, kernel_size=kernel_size, padding=pad
-            ),
-            torch.nn.BatchNorm1d(out_channels),
-            torch.nn.ReLU(),
-            torch.nn.Conv1d(
-                out_channels, out_channels, kernel_size=kernel_size, padding=pad
-            ),
-            torch.nn.BatchNorm1d(out_channels),
-            torch.nn.ReLU(),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-
-class EncoderBlock(torch.nn.Module):
-    """DoubleConv1D then MaxPool1d(2). Returns (skip, pooled)."""
-
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        super(EncoderBlock, self).__init__()
-        self.conv = DoubleConv1D(in_channels, out_channels, kernel_size)
-        self.pool = torch.nn.MaxPool1d(2)
-
-    def forward(self, x):
-        skip = self.conv(x)
-        pooled = self.pool(skip)
-        return skip, pooled
-
-
-class DecoderBlock(torch.nn.Module):
-    """Upsample via ConvTranspose1d, concat skip, then DoubleConv1D."""
-
-    def __init__(self, in_channels, skip_channels, out_channels, kernel_size=3):
-        super(DecoderBlock, self).__init__()
-        self.up = torch.nn.ConvTranspose1d(
-            in_channels, in_channels, kernel_size=2, stride=2
-        )
-        self.conv = DoubleConv1D(in_channels + skip_channels, out_channels, kernel_size)
-
-    @staticmethod
-    def _pad_to_match(x, skip):
-        """Right-pad or right-crop x by ≤1 to match skip's length."""
-        diff = skip.shape[2] - x.shape[2]
-        if diff > 0:
-            x = torch.nn.functional.pad(x, (0, diff))
-        elif diff < 0:
-            x = x[:, :, : skip.shape[2]]
-        return x
-
-    def forward(self, x, skip):
-        x = self.up(x)
-        x = self._pad_to_match(x, skip)
-        x = torch.cat([x, skip], dim=1)
-        return self.conv(x)
 
 
 class TROGDOR(torch.nn.Module):
@@ -182,6 +55,14 @@ class TROGDOR(torch.nn.Module):
         Prefix for saved model and log files. Default is "TROGDOR".
     verbose : bool, optional
         Whether to print training statistics. Default is True.
+    loss_fn : callable, optional
+        Loss function with signature ``(logits, targets) -> scalar``.
+        Stored as ``self._loss_fn`` (wrapped with ``functools.partial`` if
+        ``loss_kwargs`` is provided). Default is
+        ``torch.nn.BCEWithLogitsLoss()``.
+    loss_kwargs : dict or None, optional
+        Keyword arguments forwarded to ``loss_fn`` via ``functools.partial``.
+        Default is None.
     """
 
     def __init__(
@@ -194,7 +75,8 @@ class TROGDOR(torch.nn.Module):
         kernel_size=3,
         name="TROGDOR",
         verbose=True,
-        pos_weight=None,
+        loss_fn=None,
+        loss_kwargs=None,
     ):
         super(TROGDOR, self).__init__()
         self.name = name
@@ -251,20 +133,19 @@ class TROGDOR(torch.nn.Module):
         # Output head
         self.head = torch.nn.Conv1d(ch, 1, kernel_size=1)
 
-        if pos_weight is not None:
-            self.register_buffer("_pos_weight", torch.tensor([pos_weight]))
-            self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
-        else:
-            self._pos_weight = None
-            self.loss = BCEWithLogitsLoss(reduction="none")
+        if loss_fn is None:
+            loss_fn = torch.nn.BCEWithLogitsLoss()
+        _kw = loss_kwargs or {}
+        self._loss_fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
+
         self.logger = Logger(
             [
                 "Epoch",
                 "Iteration",
                 "Train_Time",
                 "Val_Time",
-                "Train_BCE",
-                "Val_BCE",
+                "Train_Loss",
+                "Val_Loss",
                 "Val_AUPRC",
                 "Val_Dice",
                 "Saved?",
@@ -277,7 +158,9 @@ class TROGDOR(torch.nn.Module):
         Parameters
         ----------
         X : torch.Tensor, shape=(B, 2, L)
-            Stranded nascent RNA sequencing data, logistically standardized.
+            Stranded nascent RNA sequencing data. These
+            data should be normalized using
+            `chiaroscuro.data_transforms.normalization`.
 
         Returns
         -------
@@ -312,6 +195,9 @@ class TROGDOR(torch.nn.Module):
         verbose=True,
         wandb_run=None,
         bf16=True,
+        scheduler=None,
+        loss_fn=None,
+        loss_kwargs=None,
     ):
         """
         Fit the model to data and validate it periodically.
@@ -338,14 +224,28 @@ class TROGDOR(torch.nn.Module):
         bf16 : bool
             Use bfloat16 mixed precision via torch.autocast. No GradScaler is
             needed. Set to False to train in float32. Default is True.
+        scheduler : torch.optim.lr_scheduler.LRScheduler or None
+            Learning rate scheduler stepped once per batch after each
+            ``optimizer.step()``. Pass any PyTorch scheduler; ``None`` keeps
+            the optimizer's LR fixed. Default is None.
+        loss_fn : callable or None, optional
+            Override the instance-level ``self._loss_fn`` for this training
+            run. Same signature as the constructor's ``loss_fn``. Default is
+            None (use ``self._loss_fn``).
+        loss_kwargs : dict or None, optional
+            Keyword arguments forwarded to ``loss_fn`` via
+            ``functools.partial``. Ignored when ``loss_fn`` is None.
+            Default is None.
         """
         iteration = 0
         early_stop_count = 0
-        best_loss = float("inf")
+        best_auprc = 0.0
         self.logger.start()
 
-        if self._pos_weight is not None:
-            self.loss = BCEWithLogitsLoss(reduction="none", pos_weight=self._pos_weight)
+        _fn = self._loss_fn
+        if loss_fn is not None:
+            _kw = loss_kwargs or {}
+            _fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
 
         for epoch in range(max_epochs):
             tic = time.time()
@@ -361,10 +261,24 @@ class TROGDOR(torch.nn.Module):
 
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
                     logits = self(X)
-                    loss = self.loss(logits, y).mean()
+                    if isinstance(_fn, torch.nn.Module):
+                        _fn.to(logits.device)
+                    loss = _fn(logits, y)
 
                 loss.backward()
                 optimizer.step()
+
+                if scheduler is not None:
+                    scheduler.step()
+
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "train/loss": loss.item(),
+                            "train/lr": optimizer.param_groups[0]["lr"],
+                        },
+                        step=iteration,
+                    )
 
                 epoch_loss += loss.item()
                 epoch_batches += 1
@@ -381,20 +295,16 @@ class TROGDOR(torch.nn.Module):
                     y_val = []
                     logits_val = []
                     for X_val, y_val_ in val_data:
-                        logits_val_ = predict(
-                            self,
-                            X_val,
-                            batch_size=batch_size,
-                            device="cuda",
-                            dtype=torch.bfloat16 if bf16 else None,
-                        )
+                        X_val = X_val.cuda()
+                        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
+                            logits_val_ = self(X_val)
                         logits_val.append(logits_val_)
-                        y_val.append(y_val_)
+                        y_val.append(y_val_.cuda())
 
                     y_val = torch.cat(y_val)
                     logits_val = torch.cat(logits_val)
 
-                    val_loss = self.loss(logits_val, y_val)
+                    val_loss_ = _fn(logits_val, y_val).item()
 
                     logits_flat = torch.sigmoid(logits_val.reshape(-1))
                     y_flat = y_val.reshape(-1).long()
@@ -406,7 +316,6 @@ class TROGDOR(torch.nn.Module):
                     val_dice = (2 * tp) / (preds_flat.sum() + y_flat_f.sum() + 1e-8)
 
                     val_time = time.time() - tic
-                    val_loss_ = val_loss.mean().item()
 
                     self.logger.add(
                         [
@@ -418,7 +327,7 @@ class TROGDOR(torch.nn.Module):
                             val_loss_,
                             val_auprc.item(),
                             val_dice.item(),
-                            (val_loss_ < best_loss),
+                            (val_auprc.item() > best_auprc),
                         ]
                     )
                     self.logger.save(f"{self.name}.log")
@@ -426,17 +335,16 @@ class TROGDOR(torch.nn.Module):
                     if wandb_run is not None:
                         wandb_run.log(
                             {
-                                "train/bce": train_loss_avg,
-                                "val/bce": val_loss_,
+                                "val/loss": val_loss_,
                                 "val/auprc": val_auprc.item(),
                                 "val/dice": val_dice.item(),
                             },
                             step=iteration,
                         )
 
-                    if val_loss_ < best_loss:
+                    if val_auprc.item() > best_auprc:
                         torch.save(self.state_dict(), f"{self.name}.torch")
-                        best_loss = val_loss_
+                        best_auprc = val_auprc.item()
                         early_stop_count = 0
                     else:
                         early_stop_count += 1
@@ -444,4 +352,4 @@ class TROGDOR(torch.nn.Module):
             if early_stopping is not None and early_stop_count >= early_stopping:
                 break
 
-        torch.save(self, f"{self.name}.final.torch")
+        torch.save(self.state_dict(), f"{self.name}.final.torch")

@@ -2,9 +2,7 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-This module defines dataset classes used for training TROGDOR. It is included in
-this package purely for illustrative purposes/development convenience, and is
-not used in deployment.
+This module defines dataset classes used for loading data for TROGDOR.
 """
 
 import numpy as np
@@ -15,7 +13,10 @@ import tqdm
 
 
 class NascentDataset_(torch.utils.data.Dataset):
-    """Dataset backed by pre-processed .npz files.
+    """
+    NOT USED. Has been replaced by NascentDataset. TODO: delete?
+
+    Dataset backed by pre-processed .npz files.
 
     Each .npz file must contain:
         "X" : array of shape (N, 2, L) — stranded nascent RNA coverage
@@ -130,9 +131,17 @@ class NascentDataset(torch.utils.data.Dataset):
 
         # Pre-compute window indices from BigWig chromosome sizes
         for dataset_idx, pl_bw in enumerate(tqdm.tqdm(pl_bigwigs)):
-            bw = pybigtools.open(pl_bw)
-            chrom_sizes = bw.chroms()
-            bw.close()
+            pl_bw = pybigtools.open(pl_bw)
+            pl_chrom_sizes = dict(pl_bw.chroms())
+            pl_bw.close()
+
+            mn_bw = pybigtools.open(mn_bigwigs[dataset_idx])
+            mn_chroms = set(mn_bw.chroms().keys())
+            mn_bw.close()
+
+            chrom_sizes = {
+                c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms
+            }
 
             if tss_beds is not None:
                 tss_df = pd.read_csv(
@@ -179,7 +188,9 @@ class NascentDataset(torch.utils.data.Dataset):
         pl_bw = pybigtools.open(self.pl_bigwigs[dataset_idx])
         mn_bw = pybigtools.open(self.mn_bigwigs[dataset_idx])
         pl_vals = np.array(pl_bw.values(chrom, win_start, win_end), dtype=np.float32)
-        mn_vals = np.array(mn_bw.values(chrom, win_start, win_end), dtype=np.float32)
+        mn_vals = np.abs(
+            np.array(mn_bw.values(chrom, win_start, win_end), dtype=np.float32)
+        )
         pl_bw.close()
         mn_bw.close()
 
