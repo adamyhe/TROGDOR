@@ -127,6 +127,7 @@ def cli():
         action="store_true",
         help="Whether to print progress statements",
     )
+    parser_pipeline.set_defaults(func=cmd_pipeline)
 
     # =============================================================================
 
@@ -162,7 +163,11 @@ def cli():
         help="bigWig file of nascent RNA sequencing data (minus strand)",
     )
     parser_score.add_argument(
-        "-o", "--output", required=True, type=str, help="Output bigWig file of scores"
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="Output filename prefix; produces {name}.prob.bw and {name}.qval.bw",
     )
     parser_score.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
@@ -207,6 +212,7 @@ def cli():
     parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
+    parser_score.set_defaults(func=cmd_score)
 
     # =============================================================================
 
@@ -232,21 +238,12 @@ def cli():
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
+    parser_peaks.set_defaults(func=cmd_peaks)
 
     # =============================================================================
 
-    # Load args
     args = parser.parse_args()
-
-    # Run provided command
-    if args.cmd == "score":
-        cmd_score(args)
-    elif args.cmd == "peaks":
-        cmd_peaks(args)
-    elif args.cmd in ("pipeline", "burninate"):
-        cmd_pipeline(args)
-    else:
-        raise ValueError(_help)
+    args.func(args)
 
 
 if __name__ == "__main__":

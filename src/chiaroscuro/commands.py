@@ -22,16 +22,17 @@ HF_MODEL_FILENAME = "TROGDOR.torch"
 
 
 def cmd_score(args):
-    """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
+    """Run the ``score`` subcommand: genome-wide TIR scoring to two bigWigs.
 
     Loads a TROGDOR model (downloading pretrained weights from HuggingFace Hub
     if ``args.model`` is ``None``), slides it across all requested chromosomes,
-    and writes an output bigWig whose values are BH-adjusted scores (1 − q).
+    and writes two output bigWigs derived from ``args.name``:
 
-    Only bins with a raw model probability ≥ ``args.min_score`` are retained as
-    candidates before BH correction, which is applied globally across all
-    chromosomes. The written value for each candidate bin is ``1 − q``, so bins
-    that pass a downstream FDR threshold ``α`` have written values ≥ ``1 − α``.
+    - ``{name}.prob.bw`` — raw model probabilities for candidate bins
+      (raw prob ≥ ``args.min_score``)
+    - ``{name}.qval.bw`` — BH-adjusted scores (``1 − q``) computed globally
+      across all candidate bins; bins that pass FDR threshold ``α`` have
+      values ≥ ``1 − α``
 
     Parameters
     ----------
@@ -44,8 +45,9 @@ def cmd_score(args):
             Path to the plus-strand coverage bigWig.
         ``mn_bigwig`` (str)
             Path to the minus-strand coverage bigWig.
-        ``output`` (str)
-            Path for the output bigWig.
+        ``name`` (str)
+            Output filename prefix; produces ``{name}.prob.bw`` and
+            ``{name}.qval.bw``.
         ``device`` (str)
             PyTorch device string (e.g. ``"cuda"`` or ``"cpu"``).
         ``chunk_size`` (int)
@@ -137,24 +139,35 @@ def cmd_score(args):
 
     if args.verbose:
         print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) with BH-corrected q-values"
+            f"Writing {m} candidate bins (score >= {args.min_score}) with raw scores to "
+            f"{args.name}.prob.bw."
         )
 
-    # Build prob → (1 − q) lookup; on ties keep the highest value
-    prob_to_val = {}
+    def _raw_intervals():
+        for chrom, start, end, prob in all_intervals:
+            yield chrom, start, end, prob
+
+    out_bw = pybigtools.open(f"{args.name}.prob.bw", "w")
+    out_bw.write(chrom_dict, _raw_intervals())
+
+    # Build prob → (1 − q) lookup; on ties keep the lowest q (highest 1-q)
+    prob_to_q = {}
     for prob, q in zip(all_probs_arr.tolist(), q_values.tolist()):
-        val = 1.0 - q
-        if prob not in prob_to_val or val > prob_to_val[prob]:
-            prob_to_val[prob] = val
+        if prob not in prob_to_q or q < prob_to_q[prob]:
+            prob_to_q[prob] = q
 
     def _fdr_intervals():
         for chrom, start, end, prob in all_intervals:
-            val = prob_to_val.get(prob)
-            if val is not None:
-                yield chrom, start, end, val
+            yield chrom, start, end, 1.0 - prob_to_q[prob]
 
-    out_bw = pybigtools.open(args.output, "w")
-    out_bw.write(chrom_dict, _fdr_intervals())
+    if args.verbose:
+        print(
+            f"Writing {m} candidate bins (score >= {args.min_score}) with FDR-corrected "
+            f"scores to {args.name}.qval.bw."
+        )
+
+    fdr_bw = pybigtools.open(f"{args.name}.qval.bw", "w")
+    fdr_bw.write(chrom_dict, _fdr_intervals())
 
 
 def cmd_peaks(args):
@@ -239,7 +252,8 @@ def cmd_pipeline(args):
     Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
     Output paths are derived from ``args.name``:
 
-    - ``{name}.prob.bw`` — intermediate scored bigWig (kept)
+    - ``{name}.prob.bw`` — raw score bigWig
+    - ``{name}.qval.bw`` — 1 - q-value (BH-adjusted) bigWig
     - ``{name}.peaks.bed.gz`` — final bgzipped BED of peak calls
 
     Parameters
@@ -259,7 +273,7 @@ def cmd_pipeline(args):
             model=args.model,
             pl_bigwig=args.pl_bigwig,
             mn_bigwig=args.mn_bigwig,
-            output=f"{args.name}.prob.bw",
+            name=args.name,
             device=args.device,
             chunk_size=args.chunk_size,
             overlap=args.overlap,
@@ -272,7 +286,7 @@ def cmd_pipeline(args):
     )
     cmd_peaks(
         argparse.Namespace(
-            input=f"{args.name}.prob.bw",
+            input=f"{args.name}.qval.bw",
             output=f"{args.name}.peaks.bed.gz",
             fdr_threshold=args.fdr_threshold,
             verbose=args.verbose,
