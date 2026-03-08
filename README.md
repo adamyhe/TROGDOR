@@ -8,6 +8,14 @@ TROGDOR identifies transcription initiation regions (TIRs) from stranded
 nascent RNA sequencing data (GRO-seq, PRO-seq, ChRO-seq). A pre-trained model
 is bundled with the package — most users will only need to install and run the CLI.
 
+## Installation
+
+We recommend installing inside an isolated Python environment (conda, venv, or uv):
+
+```bash
+pip install git@github.com:adamyhe/TROGDOR.git
+```
+
 ## Usage
 
 ### Quick start
@@ -53,14 +61,6 @@ trogdor score -p plus.bw -m minus.bw -o mysample.prob.bw -d cuda
 trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.1
 trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.05
 trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.01
-```
-
-## Installation
-
-We recommend installing inside an isolated Python environment (conda, venv, or uv):
-
-```bash
-pip install git@github.com:adamyhe/TROGDOR.git
 ```
 
 ## Development/Model retraining
