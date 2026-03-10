@@ -3,8 +3,10 @@
 
 import argparse
 import io
+import os
 import shutil
 import subprocess
+import tempfile
 import warnings
 
 import numpy as np
@@ -236,10 +238,10 @@ def cmd_pipeline(args):
     """Run the full pipeline: score the genome, then call peaks.
 
     Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
-    Output paths are derived from ``args.name``:
+    The intermediate probability bigWig is written to a temporary file and
+    deleted after peaks are called.  Only the final BED is kept:
 
-    - ``{name}.prob.bw`` — raw model probability bigWig
-    - ``{name}.peaks.bed.gz`` — final bgzipped BED of peak calls
+    - ``output`` — bgzipped BED of peak calls (full path specified by caller)
 
     Parameters
     ----------
@@ -248,31 +250,40 @@ def cmd_pipeline(args):
         required by ``cmd_score`` and ``cmd_peaks``:
 
         ``model`` (str or None), ``pl_bigwig`` (str), ``mn_bigwig`` (str),
-        ``name`` (str), ``device`` (str), ``chunk_size`` (int),
-        ``overlap`` (int), ``output_stride`` (int), ``batch_size`` (int),
-        ``chroms`` (list or None), ``min_score`` (float), ``verbose`` (bool).
+        ``output`` (str), ``save_bigwig`` (str or None), ``device`` (str),
+        ``chunk_size`` (int), ``overlap`` (int), ``output_stride`` (int),
+        ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
+        ``verbose`` (bool).
     """
-    cmd_score(
-        argparse.Namespace(
-            model=args.model,
-            pl_bigwig=args.pl_bigwig,
-            mn_bigwig=args.mn_bigwig,
-            name=args.name,
-            device=args.device,
-            chunk_size=args.chunk_size,
-            overlap=args.overlap,
-            output_stride=args.output_stride,
-            batch_size=args.batch_size,
-            chroms=args.chroms,
-            min_score=args.min_score,
-            verbose=args.verbose,
+    def _run(bw_prefix):
+        cmd_score(
+            argparse.Namespace(
+                model=args.model,
+                pl_bigwig=args.pl_bigwig,
+                mn_bigwig=args.mn_bigwig,
+                name=bw_prefix,
+                device=args.device,
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                output_stride=args.output_stride,
+                batch_size=args.batch_size,
+                chroms=args.chroms,
+                min_score=args.min_score,
+                verbose=args.verbose,
+            )
         )
-    )
-    cmd_peaks(
-        argparse.Namespace(
-            input=f"{args.name}.prob.bw",
-            output=f"{args.name}.peaks.bed.gz",
-            min_score=args.min_score,
-            verbose=args.verbose,
+        cmd_peaks(
+            argparse.Namespace(
+                input=f"{bw_prefix}.prob.bw",
+                output=args.output,
+                min_score=args.min_score,
+                verbose=args.verbose,
+            )
         )
-    )
+
+    if args.save_bigwig is not None:
+        bw_prefix = args.save_bigwig[:-len(".prob.bw")] if args.save_bigwig.endswith(".prob.bw") else args.save_bigwig
+        _run(bw_prefix)
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _run(os.path.join(tmpdir, "tmp"))

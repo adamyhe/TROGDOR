@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# benchmark.py
+# Author: Adam He <adamyhe@gmail.com>
+
 """Genome-wide benchmarking script for TROGDOR.
 
 Loads a trained model, scores the whole genome in strided bins, converts
@@ -57,7 +60,6 @@ def parse_args():
         "-v", "--verbose", action="store_true", help="Print per-chromosome progress"
     )
     return p.parse_args()
-
 
 
 def main():

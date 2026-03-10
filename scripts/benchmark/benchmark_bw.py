@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# benchmark_bw.py
+# Author: Adam He <adamyhe@gmail.com>
+
 """Genome-wide benchmarking from a pre-computed probability bigWig.
 
 Reads per-base (or pre-binned) predicted probabilities from a bigWig file,

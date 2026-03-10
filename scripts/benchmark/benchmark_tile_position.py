@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# benchmark_tile_position.py
+# Author: Adam He <adamyhe@gmail.com>
+
 """Benchmark tile centre vs tile edge auPRC for TROGDOR.
 
 For each pair of consecutive overlapping chunks, the same genomic bins are
@@ -87,9 +90,13 @@ def print_diagram(chunk_size, overlap, output_stride):
     stride_bins = out_chunk - 2 * out_overlap
     total = out_chunk + stride_bins  # enough to show both chunks
 
-    print(f"\nTiling geometry  (output-bin space)")
-    print(f"  chunk_size={chunk_size:,}  overlap={overlap:,}  output_stride={output_stride}")
-    print(f"  out_chunk={out_chunk:,}  out_overlap={out_overlap:,}  stride_bins={stride_bins:,}")
+    print("\nTiling geometry  (output-bin space)")
+    print(
+        f"  chunk_size={chunk_size:,}  overlap={overlap:,}  output_stride={output_stride}"
+    )
+    print(
+        f"  out_chunk={out_chunk:,}  out_overlap={out_overlap:,}  stride_bins={stride_bins:,}"
+    )
     print()
 
     # Chunk i bar

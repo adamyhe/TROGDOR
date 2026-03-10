@@ -23,15 +23,16 @@ pip install git@github.com:adamyhe/TROGDOR.git
 Run the full pipeline with a single command:
 
 ```bash
-trogdor pipeline -p plus.bw -m minus.bw -n mysample 
+trogdor pipeline -p plus.bw -m minus.bw -o mysample.peaks.bed.gz
 ```
 
-This writes two output files:
+This writes one output file:
 
-| File                    | Description                                   |
-| ----------------------- | --------------------------------------------- |
-| `mysample.prob.bw`      | Per-bin TIR scores (bigWig, 16 bp resolution) |
-| `mysample.peaks.bed.gz` | Called TIR peak regions (bgzipped BED)        |
+| File                    | Description                            |
+| ----------------------- | -------------------------------------- |
+| `mysample.peaks.bed.gz` | Called TIR peak regions (bgzipped BED) |
+
+The intermediate probability bigWig is written to a temporary file and deleted automatically.
 
 **Inputs**: plus- and minus-strand bigWig files from a nascent RNA sequencing experiment (GRO-seq, PRO-seq, or ChRO-seq).
 
@@ -41,26 +42,26 @@ This writes two output files:
 
 ### Key options
 
-| Flag                   | Default | Description                                                      |
-| ---------------------- | ------- | ---------------------------------------------------------------- |
-| `-d / --device`        | `cuda`  | PyTorch device (`cuda`, `cpu`, `cuda:1`, …)                      |
-| `-f / --fdr_threshold` | `0.1`   | BH FDR threshold for peak calls                                  |
-| `-s / --min_score`     | `0.9`   | Pre-filter: only bins with raw score ≥ this enter FDR correction |
-| `--chroms`             | all     | Score only specific chromosomes (e.g. `--chroms chr1 chr2`)      |
-| `-v / --verbose`       | off     | Print progress messages                                          |
+| Flag               | Default | Description                                                 |
+| ------------------ | ------- | ----------------------------------------------------------- |
+| `-d / --device`    | `cuda`  | PyTorch device (`cuda`, `cpu`, `cuda:1`, …)                 |
+| `-s / --min_score`   | `0.95` | Minimum score threshold; bins below this are not reported                |
+| `-b / --save_bigwig` | off    | Save the intermediate probability bigWig to this path (`pipeline` only) |
+| `--chroms`         | all     | Score only specific chromosomes (e.g. `--chroms chr1 chr2`) |
+| `-v / --verbose`   | off     | Print progress messages                                     |
 
 ### Running steps separately
 
 The pipeline can also be run as two separate steps — useful if you want to call peaks at multiple FDR thresholds without re-scoring:
 
 ```bash
-# Step 1: score (GPU recommended)
-trogdor score -p plus.bw -m minus.bw -o mysample.prob.bw -d cuda
+# Step 1: score (GPU recommended); writes mysample.prob.bw
+trogdor score -p plus.bw -m minus.bw -o mysample -d cuda
 
-# Step 2: call peaks (CPU, fast)
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.1
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.05
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --fdr_threshold 0.01
+# Step 2: call peaks at different thresholds (CPU, fast)
+trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.9
+trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.95
+trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.99
 ```
 
 ## Development/Model retraining
