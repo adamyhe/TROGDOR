@@ -164,10 +164,10 @@ def cli():
     )
     parser_score.add_argument(
         "-o",
-        "--outpu",
+        "--output",
         required=True,
         type=str,
-        help="Output filename prefix; produces {name}.prob.bw",
+        help="Output bigWig file path (e.g. sample.prob.bw).",
     )
     parser_score.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"

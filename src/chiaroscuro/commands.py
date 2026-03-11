@@ -13,7 +13,7 @@ import numpy as np
 import pybigtools
 import torch
 import tqdm
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
@@ -27,11 +27,12 @@ HF_MODEL_FILENAME = "TROGDOR.torch"
 def cmd_score(args):
     """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
 
-    Loads a TROGDOR model (downloading pretrained weights from HuggingFace Hub
-    if ``args.model`` is ``None``), slides it across all requested chromosomes,
-    and writes one output bigWig derived from ``args.name``:
+    Loads a TROGDOR model (loading pretrained weights from the local HuggingFace
+    cache, or downloading them from HuggingFace Hub, if ``args.model`` is
+    ``None``), slides it across all requested chromosomes,
+    and writes one output bigWig to ``args.output``:
 
-    - ``{name}.prob.bw`` — raw model probabilities for candidate bins
+    - ``args.output`` — raw model probabilities for candidate bins
       (raw prob ≥ ``args.min_score``)
 
     Parameters
@@ -45,8 +46,8 @@ def cmd_score(args):
             Path to the plus-strand coverage bigWig.
         ``mn_bigwig`` (str)
             Path to the minus-strand coverage bigWig.
-        ``name`` (str)
-            Output filename prefix; produces ``{name}.prob.bw``.
+        ``output`` (str)
+            Full output bigWig path (e.g. ``sample.prob.bw``).
         ``device`` (str)
             PyTorch device string (e.g. ``"cuda"`` or ``"cpu"``).
         ``chunk_size`` (int)
@@ -67,9 +68,15 @@ def cmd_score(args):
     """
     model_path = args.model
     if model_path is None:
-        if args.verbose:
-            print(f"No model specified — using pretrained weights from {HF_REPO_ID}...")
-        model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+        cached = try_to_load_from_cache(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+        if cached is not None:
+            if args.verbose:
+                print(f"Loading pretrained weights from cache: {cached}")
+            model_path = cached
+        else:
+            if args.verbose:
+                print(f"No model specified — downloading pretrained weights from {HF_REPO_ID}...")
+            model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
         if torch.backends.mps.is_available():
@@ -135,14 +142,14 @@ def cmd_score(args):
     if args.verbose:
         print(
             f"Writing {m} candidate bins (score >= {args.min_score}) to "
-            f"{args.name}.prob.bw."
+            f"{args.output}."
         )
 
     def _raw_intervals():
         for chrom, start, end, prob in all_intervals:
             yield chrom, start, end, prob
 
-    out_bw = pybigtools.open(f"{args.name}.prob.bw", "w")
+    out_bw = pybigtools.open(args.output, "w")
     out_bw.write(chrom_dict, _raw_intervals())
 
 
@@ -261,7 +268,7 @@ def cmd_pipeline(args):
                 model=args.model,
                 pl_bigwig=args.pl_bigwig,
                 mn_bigwig=args.mn_bigwig,
-                name=bw_prefix,
+                output=f"{bw_prefix}.prob.bw",
                 device=args.device,
                 chunk_size=args.chunk_size,
                 overlap=args.overlap,
