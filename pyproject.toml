@@ -21,17 +21,17 @@ dependencies = [
 ]
 
 [project.scripts]
-TROGDOR = "chiaroscuro.cli:cli"
-trogdor = "chiaroscuro.cli:cli"
-dREG = "chiaroscuro.cli:cli"
-dreg = "chiaroscuro.cli:cli"
+TROGDOR = "cli.main:cli"
+trogdor = "cli.main:cli"
+dREG = "cli.main:cli"
+dreg = "cli.main:cli"
 
 [project.optional-dependencies]
 dev = ["pytest", "wandb"]
 
 [tool.setuptools]
-package-dir = { "" = "src" }
-packages = ["chiaroscuro"]
+package-dir = { "" = "src", "cli" = "cli" }
+packages = ["chiaroscuro", "cli"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

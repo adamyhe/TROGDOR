@@ -16,7 +16,7 @@ outputs imputed transcription initiation sites.
 
 import argparse
 
-from chiaroscuro.commands import cmd_peaks, cmd_pipeline, cmd_score
+from cli.commands import cmd_peaks, cmd_pipeline, cmd_score
 
 _help = """
 The following commands are available:

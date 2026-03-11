@@ -54,8 +54,8 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 
 ### Package layout
 
-- `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
-- `src/chiaroscuro/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
+- `cli/main.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
+- `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
 - `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `bh_correct()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
