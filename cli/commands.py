@@ -17,8 +17,7 @@ from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
-from chiaroscuro.trogdor import TROGDOR
-from chiaroscuro.utils import merge_intervals
+from chiaroscuro.utils import load_model, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
@@ -89,11 +88,7 @@ def cmd_score(args):
         warnings.warn("MPS not available, falling back to CPU.")
         device = "cpu"
 
-    model = TROGDOR()
-    model.load_state_dict(
-        torch.load(model_path, weights_only=True, map_location="cpu"), strict=False
-    )
-    model = model.to(device).eval()
+    model = load_model(model_path, device)
 
     pl_bw = pybigtools.open(args.pl_bigwig)
     pl_chrom_sizes = dict(pl_bw.chroms())
