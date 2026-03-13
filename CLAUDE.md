@@ -30,18 +30,32 @@ trogdor peaks -i scores.bw -o peaks.bed.gz --fdr_threshold 0.05
 
 Example (full pipeline):
 ```bash
-trogdor pipeline -M model.torch -p plus.bw -m minus.bw -n sample -d cuda
-# writes sample.prob.bw and sample.peaks.bed.gz
+trogdor pipeline -M model.torch -p plus.bw -m minus.bw -o sample.peaks.bed.gz -d cuda
+# writes sample.peaks.bed.gz; intermediate bigWig is written to a temp file
+# and deleted automatically
+
+# optionally save the bigWig:
+trogdor pipeline -M model.torch -p plus.bw -m minus.bw -o sample.peaks.bed.gz -b sample.prob.bw -d cuda
 ```
 
 Short contigs shorter than `--chunk_size` (default 262144) are automatically skipped by `score` with a warning when `-v` is set.
+
+## Benchmark scripts
+
+Diagnostic and evaluation scripts live in `scripts/benchmark/`:
+
+- `benchmark.py` – Genome-wide AUROC/AUPRC from a trained model and peak BED ground truth
+- `benchmark_bw.py` – Same benchmarking from a pre-computed probability bigWig
+- `benchmark_tile_position.py` – Compares auPRC for tile-centre vs tile-edge bins across overlapping chunks
+- `frip.py` – Calculates raw and normalized FRIP (Fraction of Reads In Peaks) from stranded bigWigs and a peak BED; normalized FRIP corrects for peak-set size (equivalent to fold-enrichment over uniform expectation)
+- `logit_dist.py` – Logit score distribution diagnostic: reads a probability bigWig, converts to logits, and produces a histogram+KDE / empirical-CDF figure with quantile reference lines
 
 ## Architecture
 
 ### Package layout
 
-- `src/chiaroscuro/cli.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
-- `src/chiaroscuro/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
+- `cli/main.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
+- `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
 - `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `bh_correct()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)

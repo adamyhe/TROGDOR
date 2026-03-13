@@ -1,5 +1,13 @@
+# utils.py
+# Author: Adam He <adamyhe@gmail.com>
+
+"""
+A bunch of utility functions used for predicting and benchmarking TROGDOR.
+"""
+
 import numpy as np
 import torch
+
 from chiaroscuro.trogdor import TROGDOR
 
 

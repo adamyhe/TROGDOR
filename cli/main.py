@@ -16,7 +16,7 @@ outputs imputed transcription initiation sites.
 
 import argparse
 
-from chiaroscuro.commands import cmd_peaks, cmd_pipeline, cmd_score
+from cli.commands import cmd_peaks, cmd_pipeline, cmd_score
 
 _help = """
 The following commands are available:
@@ -68,11 +68,11 @@ def cli():
         help="bigWig file of nascent RNA sequencing data (minus strand)",
     )
     parser_pipeline.add_argument(
-        "-n",
-        "--name",
+        "-o",
+        "--output",
         required=True,
         type=str,
-        help="Output filename prefix for scores bigWig and peak calls.",
+        help="Output BED file path for peak calls (e.g. sample.peaks.bed.gz).",
     )
     parser_pipeline.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
@@ -111,8 +111,15 @@ def cli():
         "-s",
         "--min_score",
         type=float,
-        default=0.9,
-        help="Minimum probability to store/report a bin (default: 0.9)",
+        default=0.95,
+        help="Minimum probability to store/report a bin (default: 0.95)",
+    )
+    parser_pipeline.add_argument(
+        "-b",
+        "--save_bigwig",
+        default=None,
+        type=str,
+        help="If provided, save the intermediate probability bigWig to this path instead of a temp file.",
     )
     parser_pipeline.add_argument(
         "-v",
@@ -156,11 +163,11 @@ def cli():
         help="bigWig file of nascent RNA sequencing data (minus strand)",
     )
     parser_score.add_argument(
-        "-n",
-        "--name",
+        "-o",
+        "--output",
         required=True,
         type=str,
-        help="Output filename prefix; produces {name}.prob.bw",
+        help="Output bigWig file path (e.g. sample.prob.bw).",
     )
     parser_score.add_argument(
         "-d", "--device", default="cuda", type=str, help="Backend device for pytorch"
@@ -199,8 +206,8 @@ def cli():
         "-s",
         "--min_score",
         type=float,
-        default=0.9,
-        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.9)",
+        default=0.95,
+        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.95)",
     )
     parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
@@ -225,8 +232,8 @@ def cli():
         "-s",
         "--min_score",
         type=float,
-        default=0.9,
-        help="Minimum probability to report a bin as a peak (default: 0.9)",
+        default=0.95,
+        help="Minimum probability to report a bin as a peak (default: 0.95)",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"

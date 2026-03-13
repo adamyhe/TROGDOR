@@ -3,20 +3,21 @@
 
 import argparse
 import io
+import os
 import shutil
 import subprocess
+import tempfile
 import warnings
 
 import numpy as np
 import pybigtools
 import torch
 import tqdm
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
-from chiaroscuro.trogdor import TROGDOR
-from chiaroscuro.utils import merge_intervals
+from chiaroscuro.utils import load_model, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
@@ -25,11 +26,12 @@ HF_MODEL_FILENAME = "TROGDOR.torch"
 def cmd_score(args):
     """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
 
-    Loads a TROGDOR model (downloading pretrained weights from HuggingFace Hub
-    if ``args.model`` is ``None``), slides it across all requested chromosomes,
-    and writes one output bigWig derived from ``args.name``:
+    Loads a TROGDOR model (loading pretrained weights from the local HuggingFace
+    cache, or downloading them from HuggingFace Hub, if ``args.model`` is
+    ``None``), slides it across all requested chromosomes,
+    and writes one output bigWig to ``args.output``:
 
-    - ``{name}.prob.bw`` — raw model probabilities for candidate bins
+    - ``args.output`` — raw model probabilities for candidate bins
       (raw prob ≥ ``args.min_score``)
 
     Parameters
@@ -43,8 +45,8 @@ def cmd_score(args):
             Path to the plus-strand coverage bigWig.
         ``mn_bigwig`` (str)
             Path to the minus-strand coverage bigWig.
-        ``name`` (str)
-            Output filename prefix; produces ``{name}.prob.bw``.
+        ``output`` (str)
+            Full output bigWig path (e.g. ``sample.prob.bw``).
         ``device`` (str)
             PyTorch device string (e.g. ``"cuda"`` or ``"cpu"``).
         ``chunk_size`` (int)
@@ -65,9 +67,15 @@ def cmd_score(args):
     """
     model_path = args.model
     if model_path is None:
-        if args.verbose:
-            print(f"No model specified — using pretrained weights from {HF_REPO_ID}...")
-        model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+        cached = try_to_load_from_cache(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+        if cached is not None:
+            if args.verbose:
+                print(f"Loading pretrained weights from cache: {cached}")
+            model_path = cached
+        else:
+            if args.verbose:
+                print(f"No model specified — downloading pretrained weights from {HF_REPO_ID}...")
+            model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
         if torch.backends.mps.is_available():
@@ -80,11 +88,7 @@ def cmd_score(args):
         warnings.warn("MPS not available, falling back to CPU.")
         device = "cpu"
 
-    model = TROGDOR()
-    model.load_state_dict(
-        torch.load(model_path, weights_only=True, map_location="cpu"), strict=False
-    )
-    model = model.to(device).eval()
+    model = load_model(model_path, device)
 
     pl_bw = pybigtools.open(args.pl_bigwig)
     pl_chrom_sizes = dict(pl_bw.chroms())
@@ -133,14 +137,14 @@ def cmd_score(args):
     if args.verbose:
         print(
             f"Writing {m} candidate bins (score >= {args.min_score}) to "
-            f"{args.name}.prob.bw."
+            f"{args.output}."
         )
 
     def _raw_intervals():
         for chrom, start, end, prob in all_intervals:
             yield chrom, start, end, prob
 
-    out_bw = pybigtools.open(f"{args.name}.prob.bw", "w")
+    out_bw = pybigtools.open(args.output, "w")
     out_bw.write(chrom_dict, _raw_intervals())
 
 
@@ -236,10 +240,10 @@ def cmd_pipeline(args):
     """Run the full pipeline: score the genome, then call peaks.
 
     Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
-    Output paths are derived from ``args.name``:
+    The intermediate probability bigWig is written to a temporary file and
+    deleted after peaks are called.  Only the final BED is kept:
 
-    - ``{name}.prob.bw`` — raw model probability bigWig
-    - ``{name}.peaks.bed.gz`` — final bgzipped BED of peak calls
+    - ``output`` — bgzipped BED of peak calls (full path specified by caller)
 
     Parameters
     ----------
@@ -248,31 +252,40 @@ def cmd_pipeline(args):
         required by ``cmd_score`` and ``cmd_peaks``:
 
         ``model`` (str or None), ``pl_bigwig`` (str), ``mn_bigwig`` (str),
-        ``name`` (str), ``device`` (str), ``chunk_size`` (int),
-        ``overlap`` (int), ``output_stride`` (int), ``batch_size`` (int),
-        ``chroms`` (list or None), ``min_score`` (float), ``verbose`` (bool).
+        ``output`` (str), ``save_bigwig`` (str or None), ``device`` (str),
+        ``chunk_size`` (int), ``overlap`` (int), ``output_stride`` (int),
+        ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
+        ``verbose`` (bool).
     """
-    cmd_score(
-        argparse.Namespace(
-            model=args.model,
-            pl_bigwig=args.pl_bigwig,
-            mn_bigwig=args.mn_bigwig,
-            name=args.name,
-            device=args.device,
-            chunk_size=args.chunk_size,
-            overlap=args.overlap,
-            output_stride=args.output_stride,
-            batch_size=args.batch_size,
-            chroms=args.chroms,
-            min_score=args.min_score,
-            verbose=args.verbose,
+    def _run(bw_prefix):
+        cmd_score(
+            argparse.Namespace(
+                model=args.model,
+                pl_bigwig=args.pl_bigwig,
+                mn_bigwig=args.mn_bigwig,
+                output=f"{bw_prefix}.prob.bw",
+                device=args.device,
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                output_stride=args.output_stride,
+                batch_size=args.batch_size,
+                chroms=args.chroms,
+                min_score=args.min_score,
+                verbose=args.verbose,
+            )
         )
-    )
-    cmd_peaks(
-        argparse.Namespace(
-            input=f"{args.name}.prob.bw",
-            output=f"{args.name}.peaks.bed.gz",
-            min_score=args.min_score,
-            verbose=args.verbose,
+        cmd_peaks(
+            argparse.Namespace(
+                input=f"{bw_prefix}.prob.bw",
+                output=args.output,
+                min_score=args.min_score,
+                verbose=args.verbose,
+            )
         )
-    )
+
+    if args.save_bigwig is not None:
+        bw_prefix = args.save_bigwig[:-len(".prob.bw")] if args.save_bigwig.endswith(".prob.bw") else args.save_bigwig
+        _run(bw_prefix)
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _run(os.path.join(tmpdir, "tmp"))
