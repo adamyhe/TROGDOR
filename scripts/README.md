@@ -42,18 +42,18 @@ python scripts/train/train.py
 
 Trains on G1/G2/G3/G5 with a 7:1 ratio of TSS-centered to genome-tiled
 windows per batch, validates on G6, and saves the best checkpoint by
-validation BCE. Early stopping is applied after 5 epochs without improvement.
+validation loss. Early stopping is applied after 5 epochs without improvement.
 
 The LR schedule is linear warmup (500 steps, 1e-8 → 1e-3) followed by
 cosine annealing to near zero over the remaining steps.
 
 ### Loss function
 
-The default loss is `focal_tversky_loss` from `chiaroscuro.losses`. Available built-in losses:
+The default loss is `BCEWithLogitsLoss` (PyTorch built-in). Available built-in alternatives from `chiaroscuro.losses`:
 
 | Function | Description |
 |----------|-------------|
-| `focal_tversky_loss` (default) | Focal Tversky loss (Abraham & Khan 2019); raises Tversky index to power `1/γ`, emphasising hard missed regions; `α`/`β` control FP/FN weighting. |
+| `focal_tversky_loss` | Focal Tversky loss (Abraham & Khan 2019); raises Tversky index to power `1/γ`, emphasising hard missed regions; `α`/`β` control FP/FN weighting. |
 | `tversky_loss` | Plain Tversky index loss without focal re-weighting. |
 | `focal_loss` | Alpha-balanced focal loss (Lin et al. 2017); down-weights easy negatives via `(1−p)^γ`. |
 
