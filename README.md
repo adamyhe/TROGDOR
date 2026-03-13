@@ -56,12 +56,11 @@ The pipeline can also be run as two separate steps — useful if you want to cal
 
 ```bash
 # Step 1: score (GPU recommended); writes mysample.prob.bw
-trogdor score -p plus.bw -m minus.bw -o mysample -d cuda
+trogdor score -p plus.bw -m minus.bw -o mysample.peaks0.9.bed.gz -b mysample.prob0.9.bw -s 0.9
 
 # Step 2: call peaks at different thresholds (CPU, fast)
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.9
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.95
-trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz -s 0.99
+trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.95.bed.gz -s 0.95
+trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.99.bed.gz -s 0.99
 ```
 
 ## Development/Model retraining
