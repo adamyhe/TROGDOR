@@ -25,7 +25,7 @@ bash scripts/data/download_training_data.sh
 ```
 
 | Sample | Assay   | GEO accession |
-|--------|---------|---------------|
+| ------ | ------- | ------------- |
 | G1     | PRO-seq | GSM1480327    |
 | G2     | GRO-seq | GSM1480325    |
 | G3     | GRO-seq | GSM3452725    |
@@ -42,20 +42,20 @@ python scripts/train/train.py
 
 Trains on G1/G2/G3/G5 with a 7:1 ratio of TSS-centered to genome-tiled
 windows per batch, validates on G6, and saves the best checkpoint by
-validation BCE. Early stopping is applied after 5 epochs without improvement.
+validation loss. Early stopping is applied after 5 epochs without improvement.
 
 The LR schedule is linear warmup (500 steps, 1e-8 → 1e-3) followed by
 cosine annealing to near zero over the remaining steps.
 
 ### Loss function
 
-The default loss is `focal_tversky_loss` from `chiaroscuro.losses`. Available built-in losses:
+The default loss is `BCEWithLogitsLoss` (PyTorch built-in). Available built-in alternatives from `chiaroscuro.losses`:
 
-| Function | Description |
-|----------|-------------|
-| `focal_tversky_loss` (default) | Focal Tversky loss (Abraham & Khan 2019); raises Tversky index to power `1/γ`, emphasising hard missed regions; `α`/`β` control FP/FN weighting. |
-| `tversky_loss` | Plain Tversky index loss without focal re-weighting. |
-| `focal_loss` | Alpha-balanced focal loss (Lin et al. 2017); down-weights easy negatives via `(1−p)^γ`. |
+| Function             | Description                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `focal_tversky_loss` | Focal Tversky loss (Abraham & Khan 2019); raises Tversky index to power `1/γ`, emphasising hard missed regions; `α`/`β` control FP/FN weighting. |
+| `tversky_loss`       | Plain Tversky index loss without focal re-weighting.                                                                                             |
+| `focal_loss`         | Alpha-balanced focal loss (Lin et al. 2017); down-weights easy negatives via `(1−p)^γ`.                                                          |
 
 To override, pass a callable to `loss_fn=` in the `TROGDOR(...)` constructor. For example, we can construct a combined focal + tversky loss function via:
 
@@ -113,16 +113,19 @@ python scripts/benchmark/benchmark.py \
   -v
 ```
 
-| Flag | Description |
-|------|-------------|
-| `-M/--model` | Path to `.torch` state dict |
-| `-p/--pl_bigwig` | Plus-strand bigWig |
-| `-m/--mn_bigwig` | Minus-strand bigWig |
-| `-t/--peaks` | Ground-truth peak BED (gzipped OK) |
-| `-d/--device` | Device (default: `cuda`) |
-| `--output_stride` | Bin size in bp (default: `16`) |
-| `--chroms` | Chromosome whitelist (default: all) |
-| `-v/--verbose` | Show per-chunk tqdm progress bar for each chromosome |
+| Flag                 | Description                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `-M/--model`         | Path to `.torch` state dict                                            |
+| `-p/--pl_bigwig`     | Plus-strand bigWig                                                     |
+| `-m/--mn_bigwig`     | Minus-strand bigWig                                                    |
+| `-t/--peaks`         | Ground-truth peak BED (gzipped OK)                                     |
+| `-d/--device`        | Device (default: `cuda`)                                               |
+| `--output_stride`    | Bin size in bp (default: `16`)                                         |
+| `--chroms`           | Chromosome whitelist (default: all)                                    |
+| `-o/--output_prefix` | Prefix for PDF plots; writes `<prefix>.roc.pdf` and `<prefix>.prc.pdf` |
+| `-v/--verbose`       | Show per-chunk tqdm progress bar for each chromosome                   |
+
+In addition to AUROC/AUPRC, the script prints score thresholds corresponding to a range of FPRs and FPRs/TPRs at a range of thresholds.
 
 Expected output on K562 data: AUROC > 0.9, AUPRC meaningfully above the positive rate (~1%).
 
@@ -136,13 +139,13 @@ python scripts/benchmark/benchmark_bw.py \
   -v
 ```
 
-| Flag | Description |
-|------|-------------|
-| `-b/--bigwig` | Pre-computed probability bigWig |
-| `-t/--peaks` | Ground-truth peak BED (gzipped OK) |
+| Flag              | Description                                                             |
+| ----------------- | ----------------------------------------------------------------------- |
+| `-b/--bigwig`     | Pre-computed probability bigWig                                         |
+| `-t/--peaks`      | Ground-truth peak BED (gzipped OK)                                      |
 | `--output_stride` | Bin size in bp; probs are max-pooled to this resolution (default: `16`) |
-| `--chroms` | Chromosome whitelist (default: all) |
-| `-v/--verbose` | Print per-chromosome progress |
+| `--chroms`        | Chromosome whitelist (default: all)                                     |
+| `-v/--verbose`    | Print per-chromosome progress                                           |
 
 ### Tile position benchmark
 
@@ -160,18 +163,18 @@ python scripts/benchmark/benchmark_tile_position.py \
   -v
 ```
 
-| Flag | Description |
-|------|-------------|
-| `-M/--model` | Path to `.torch` state dict |
-| `-p/--pl_bigwig` | Plus-strand bigWig |
-| `-m/--mn_bigwig` | Minus-strand bigWig |
-| `-t/--peaks` | Ground-truth peak BED (gzipped OK) |
-| `-d/--device` | Device (default: `cuda`) |
-| `--chunk_size` | Input chunk size in bp (default: `262144`) |
-| `--overlap` | Edge overlap in bp (default: `32768`) |
-| `--output_stride` | Bin size in bp (default: `16`) |
-| `--chroms` | Chromosome whitelist (default: all) |
-| `-v/--verbose` | Print per-chromosome progress |
+| Flag              | Description                                |
+| ----------------- | ------------------------------------------ |
+| `-M/--model`      | Path to `.torch` state dict                |
+| `-p/--pl_bigwig`  | Plus-strand bigWig                         |
+| `-m/--mn_bigwig`  | Minus-strand bigWig                        |
+| `-t/--peaks`      | Ground-truth peak BED (gzipped OK)         |
+| `-d/--device`     | Device (default: `cuda`)                   |
+| `--chunk_size`    | Input chunk size in bp (default: `262144`) |
+| `--overlap`       | Edge overlap in bp (default: `32768`)      |
+| `--output_stride` | Bin size in bp (default: `16`)             |
+| `--chroms`        | Chromosome whitelist (default: all)        |
+| `-v/--verbose`    | Print per-chromosome progress              |
 
 Output prints the number of comparable bins, the centre auPRC, and the edge
 auPRC. A small gap between the two indicates that boundary artefacts are

@@ -27,7 +27,7 @@ dREG = "cli.main:cli"
 dreg = "cli.main:cli"
 
 [project.optional-dependencies]
-dev = ["pytest", "wandb"]
+dev = ["pytest", "wandb", "matplotlib", "scikit-learn"]
 
 [tool.setuptools]
 package-dir = { "" = "src", "cli" = "cli" }
