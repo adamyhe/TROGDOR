@@ -8,7 +8,6 @@ tracks and candidate peak BED files.
 
 import numpy as np
 import pandas as pd
-import tqdm
 
 
 def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose):
@@ -43,11 +42,10 @@ def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose):
         mask = peaks_df["chrom"] == chrom
         if not mask.any():
             continue
-        for idx, row in tqdm.tqdm(
-            peaks_df[mask].iterrows(),
-            desc=print(f"Scoring {mask.sum()} peaks on {chrom}", flush=True),
-            disable=not verbose,
-        ):
+        if verbose:
+            n = mask.sum()
+            print(f"  Scoring {n} peaks on {chrom}...", flush=True)
+        for idx, row in peaks_df[mask].iterrows():
             start = int(row["start"])
             end = min(int(row["end"]), chrom_len)
             if start >= end:

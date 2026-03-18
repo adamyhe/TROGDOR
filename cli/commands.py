@@ -77,7 +77,9 @@ def cmd_score(args):
             model_path = cached
         else:
             if args.verbose:
-                print(f"No model specified — downloading pretrained weights from {HF_REPO_ID}...")
+                print(
+                    f"No model specified — downloading pretrained weights from {HF_REPO_ID}..."
+                )
             model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
@@ -140,8 +142,7 @@ def cmd_score(args):
 
     if args.verbose:
         print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) to "
-            f"{args.output}."
+            f"Writing {m} candidate bins (score >= {args.min_score}) to {args.output}."
         )
 
     def _raw_intervals():
@@ -261,6 +262,7 @@ def cmd_pipeline(args):
         ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
         ``verbose`` (bool).
     """
+
     def _run(bw_prefix):
         cmd_score(
             argparse.Namespace(
@@ -289,7 +291,11 @@ def cmd_pipeline(args):
         )
 
     if args.save_bigwig is not None:
-        bw_prefix = args.save_bigwig[:-len(".prob.bw")] if args.save_bigwig.endswith(".prob.bw") else args.save_bigwig
+        bw_prefix = (
+            args.save_bigwig[: -len(".prob.bw")]
+            if args.save_bigwig.endswith(".prob.bw")
+            else args.save_bigwig
+        )
         _run(bw_prefix)
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -355,7 +361,7 @@ def cmd_fdr(args):
             f"Scoring {len(peaks_df):,} real peaks from {args.bigwig}...",
             flush=True,
         )
-    real_scores = score_peaks(bw, peaks_df, chrom_sizes, args.stat, chroms, args.verbose)
+    real_scores = score_peaks(bw, peaks_df, chrom_sizes, args.stat, chroms)
     real_scores = real_scores[~np.isnan(real_scores)]
 
     if len(real_scores) == 0:
@@ -373,7 +379,9 @@ def cmd_fdr(args):
     bw.close()
 
     null_scores = np.concatenate(null_score_lists)
-    thresholds, n_real, n_null, fdr = compute_fdr(real_scores, null_scores, args.n_shuffle, args.n_thresholds)
+    thresholds, n_real, n_null, fdr = compute_fdr(
+        real_scores, null_scores, args.n_shuffle, args.n_thresholds
+    )
 
     # ---- Find threshold at FDR target ----
     passing = np.where(fdr <= args.fdr_target)[0]
@@ -422,9 +430,23 @@ def cmd_fdr(args):
         # Left — score distributions
         ax = axes[0]
         bins = np.linspace(thresholds[0], thresholds[-1], 60)
-        ax.hist(real_scores, bins=bins, density=True, alpha=0.6, color="steelblue", label="real")
+        ax.hist(
+            real_scores,
+            bins=bins,
+            density=True,
+            alpha=0.6,
+            color="steelblue",
+            label="real",
+        )
         if len(null_scores) > 0:
-            ax.hist(null_scores, bins=bins, density=True, alpha=0.5, color="salmon", label="null")
+            ax.hist(
+                null_scores,
+                bins=bins,
+                density=True,
+                alpha=0.5,
+                color="salmon",
+                label="null",
+            )
         if not np.isnan(threshold_at_target):
             ax.axvline(
                 threshold_at_target,
@@ -441,7 +463,13 @@ def cmd_fdr(args):
         # Right — FDR curve
         ax = axes[1]
         ax.plot(thresholds, fdr, color="black", linewidth=1.5)
-        ax.axhline(args.fdr_target, color="firebrick", linestyle="--", linewidth=0.8, label=f"FDR={args.fdr_target}")
+        ax.axhline(
+            args.fdr_target,
+            color="firebrick",
+            linestyle="--",
+            linewidth=0.8,
+            label=f"FDR={args.fdr_target}",
+        )
         if not np.isnan(threshold_at_target):
             ax.axvline(
                 threshold_at_target,
