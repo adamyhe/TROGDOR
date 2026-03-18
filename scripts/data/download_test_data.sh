@@ -18,14 +18,16 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/GSM3518118/suppl/GSM3518118%5FN%5FtCTD%5F2%5FCTAGCT%5F2%5FK562%5Fwildtype.plus.bw -O "$DATA_DIR"/K562_mnetseq_2.pl.bw
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/GSM3518118/suppl/GSM3518118%5FN%5FtCTD%5F2%5FCTAGCT%5F2%5FK562%5Fwildtype.minus.bw -O "$DATA_DIR"/K562_mnetseq_2.mn.bw
 
-bigWigMerge K562_mnetseq_1.pl.bw K562_mnetseq_2.pl.bw K562_mnetseq.pl.bg
-bigWigMerge --threshold=-10000000 K562_mnetseq_1.mn.bw K562_mnetseq_2.mn.bw K562_mnetseq.mn.bg
-bedGraphToBigWig K562_mnetseq.sort.pl.bg /home2/ayh8/data/hg38.chrom.sizes K562_mnetseq.pl.bw
-bedGraphToBigWig K562_mnetseq.sort.mn.bg /home2/ayh8/data/hg38.chrom.sizes K562_mnetseq.mn.bw
+CHROM_SIZES="${DATA_DIR}/hg38.chrom.sizes"
+wget -q https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes -O "$CHROM_SIZES"
 
+bigWigMerge "$DATA_DIR"/K562_mnetseq_1.pl.bw "$DATA_DIR"/K562_mnetseq_2.pl.bw "$DATA_DIR"/K562_mnetseq.pl.bg
+bigWigMerge --threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
+sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.pl.bg > "$DATA_DIR"/K562_mnetseq.sort.pl.bg
+sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.mn.bg > "$DATA_DIR"/K562_mnetseq.sort.mn.bg
+bedGraphToBigWig "$DATA_DIR"/K562_mnetseq.sort.pl.bg "$CHROM_SIZES" "$DATA_DIR"/K562_mnetseq.pl.bw
+bedGraphToBigWig "$DATA_DIR"/K562_mnetseq.sort.mn.bg "$CHROM_SIZES" "$DATA_DIR"/K562_mnetseq.mn.bw
 
+# Jurkat PRO-seq/ChRO-seq goes here.
 
-# ORIG DATA
-# /fs/cbsubscb17/storage/archive/zw355/proj/prj10-dreg/GM12878
-# /fs/cbsubscb17/storage/archive/zw355/proj/prj10-dreg/K562
-
+# HeLa mNET-seq goes here.

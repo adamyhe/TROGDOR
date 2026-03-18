@@ -21,12 +21,20 @@ The tool operates in three subcommands:
 1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of BH-adjusted probabilities
 2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig using a score threshold derived from a BH FDR threshold
 3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix
+4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for candidate peaks from a probability bigWig; shuffles the peak set to build a null distribution and reports the score threshold at a target FDR
 
 Example (individual steps):
 ```bash
 trogdor score -M model.torch -p plus.bw -m minus.bw -o scores.bw -d cuda
 trogdor peaks -i scores.bw -o peaks.bed.gz --fdr_threshold 0.05
 ```
+
+Example (FDR estimation):
+```bash
+trogdor fdr -b scores.bw -t candidate_peaks.bed.gz --fdr_target 0.05 --output fdr_table.tsv --figure fdr_curve.png
+```
+
+The `fdr` subcommand scores each candidate peak with the summary statistic (`--stat max` or `mean`), then shuffles those peaks within chromosome bounds to build a null distribution. FDR at threshold `t` is estimated as `min(1, N_null(t) / N_real(t))`, averaged over `--n_shuffle` independent shuffles (default 1). The score threshold at the target FDR is printed to stdout.
 
 Example (full pipeline):
 ```bash
@@ -65,6 +73,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
 - `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2), `predict_chromosome()` (sliding-window chromosome scoring via DataLoader), and `predict_genome()` (genome-wide generator with background IO prefetch)
+- `src/chiaroscuro/stats.py` – Empirical FDR helpers: `score_peaks()` (summarise bigWig scores over a peak BED), `shuffle_peaks()` (randomise peak positions within chromosome bounds), `compute_fdr()` (build FDR curve from real and null scores)
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 
 ### Model architecture (`TROGDOR`)
@@ -98,6 +107,7 @@ conda run -n trogdor <command>
 ```
 
 Examples:
+
 ```bash
 conda run -n trogdor python -c "from chiaroscuro.utils import bh_correct; print('OK')"
 conda run -n trogdor trogdor score --help
