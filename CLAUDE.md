@@ -40,6 +40,8 @@ trogdor pipeline -M model.torch -p plus.bw -m minus.bw -o sample.peaks.bed.gz -b
 
 Short contigs shorter than `--chunk_size` (default 262144) are automatically skipped by `score` with a warning when `-v` is set.
 
+Pass `--num_workers N` (default 0) to enable parallel DataLoader workers for chunk preprocessing within each chromosome. Values of 1–4 are useful on Linux/CUDA systems; leave at 0 on macOS (fork-safety) or when CPU is not the bottleneck.
+
 ## Benchmark scripts
 
 Diagnostic and evaluation scripts live in `scripts/benchmark/`:
@@ -62,7 +64,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
 - `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
-- `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2) and `predict_chromosome()` (sliding-window chromosome scoring)
+- `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2), `predict_chromosome()` (sliding-window chromosome scoring via DataLoader), and `predict_genome()` (genome-wide generator with background IO prefetch)
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 
 ### Model architecture (`TROGDOR`)

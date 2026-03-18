@@ -37,7 +37,7 @@ The intermediate probability bigWig is written to a temporary file and deleted a
 
 **Inputs**: plus- and minus-strand bigWig files from a nascent RNA sequencing experiment (GRO-seq, PRO-seq, or ChRO-seq).
 
-**GPU**: scoring uses a 1D U-Net model implemented in plain PyTorch and thus can be greatly accelerated by running on a CUDA-capable GPU (particularly Ampere or newer architectures that support bf16). Apple Silicon MPS (`-d mps`) should also work but has not been tested. Pass `-d cpu` to run on CPU (much slower). If CUDA is unavailable, the tool automatically falls back to MPS (if detected) or CPU.
+**GPU**: scoring uses a 1D U-Net model implemented in plain PyTorch and thus can be greatly accelerated by running on a CUDA-capable GPU (particularly Ampere or newer architectures that support bf16). Apple Silicon MPS (`-d mps`) should also work but has not been tested. Pass `-d cpu` to run on CPU (much slower). If CUDA is unavailable, the tool automatically falls back to MPS (if detected) or CPU. Inference uses a streaming pipeline: bigWig IO for the next chromosome runs in a background thread while the GPU processes the current one, and chunks are fed to the GPU via a DataLoader with `pin_memory` for async CPU→GPU transfer.
 
 **Pretrained model**: downloaded automatically from [HuggingFace Hub](https://huggingface.co/adamyhe/TROGDOR) on first run and cached locally. To use a custom model, pass `-M /path/to/model.torch`.
 
@@ -49,6 +49,7 @@ The intermediate probability bigWig is written to a temporary file and deleted a
 | `-s / --min_score`   | `0.95`  | Minimum score threshold; bins below this are not reported               |
 | `-b / --save_bigwig` | off     | Save the intermediate probability bigWig to this path (`pipeline` only) |
 | `--chroms`           | all     | Score only specific chromosomes (e.g. `--chroms chr1 chr2`)             |
+| `--num_workers`      | `0`     | DataLoader workers for chunk preprocessing (set to 1–4 on Linux/CUDA)  |
 | `-v / --verbose`     | off     | Print progress messages                                                 |
 
 ### Running steps separately

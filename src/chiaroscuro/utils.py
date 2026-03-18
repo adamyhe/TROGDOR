@@ -47,36 +47,6 @@ def merge_intervals(intervals):
     return merged
 
 
-def bh_correct(probs):
-    """Apply Benjamini–Hochberg correction to an array of probabilities.
-
-    Treats each probability ``p`` as ``1 - p_value`` and returns an array of
-    BH-adjusted q-values of the same length. FDR is controlled within the
-    supplied set of candidates.
-
-    Parameters
-    ----------
-    probs : np.ndarray, shape (m,)
-        Raw model probabilities in [0, 1].
-
-    Returns
-    -------
-    q_values : np.ndarray, shape (m,)
-        BH q-values. Empty array if ``probs`` is empty.
-    """
-    m = len(probs)
-    if m == 0:
-        return np.array([])
-    p = 1.0 - probs
-    sort_idx = np.argsort(p)
-    sorted_p = p[sort_idx]
-    raw_q = sorted_p * m / np.arange(1, m + 1)
-    q_sorted = np.minimum.accumulate(raw_q[::-1])[::-1]
-    q_values = np.empty(m)
-    q_values[sort_idx] = q_sorted
-    return q_values
-
-
 def encode_labels(peaks_df, chrom, chrom_len, output_stride):
     """Return a float32 binary array of length chrom_len // output_stride."""
     n_bins = chrom_len // output_stride

@@ -18,9 +18,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--pos_weight",
     type=float,
-    default=None,
+    default=500,
     help="Positive class weight for BCEWithLogitsLoss. Upweights positive bins "
-    "to compensate for class imbalance. Default: no reweighting.",
+    "to compensate for class imbalance. Default: 500.",
 )
 parser.add_argument(
     "--lr", type=float, default=1e-3, help="Learning rate. Default: 1e-3."
