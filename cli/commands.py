@@ -6,10 +6,12 @@ import io
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import warnings
 
 import numpy as np
+import pandas as pd
 import pybigtools
 import torch
 import tqdm
@@ -17,6 +19,7 @@ from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.predict import predict_genome
+from chiaroscuro.stats import compute_fdr, score_peaks, shuffle_peaks
 from chiaroscuro.utils import load_model, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
@@ -74,7 +77,9 @@ def cmd_score(args):
             model_path = cached
         else:
             if args.verbose:
-                print(f"No model specified — downloading pretrained weights from {HF_REPO_ID}...")
+                print(
+                    f"No model specified — downloading pretrained weights from {HF_REPO_ID}..."
+                )
             model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
@@ -119,6 +124,7 @@ def cmd_score(args):
         transform=normalization,
         device=device,
         verbose=args.verbose,
+        num_workers=getattr(args, "num_workers", 0),
     ):
         chrom_dict[chrom] = chrom_len
         bin_indices = np.where(probs >= args.min_score)[0]
@@ -136,8 +142,7 @@ def cmd_score(args):
 
     if args.verbose:
         print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) to "
-            f"{args.output}."
+            f"Writing {m} candidate bins (score >= {args.min_score}) to {args.output}."
         )
 
     def _raw_intervals():
@@ -257,6 +262,7 @@ def cmd_pipeline(args):
         ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
         ``verbose`` (bool).
     """
+
     def _run(bw_prefix):
         cmd_score(
             argparse.Namespace(
@@ -272,6 +278,7 @@ def cmd_pipeline(args):
                 chroms=args.chroms,
                 min_score=args.min_score,
                 verbose=args.verbose,
+                num_workers=args.num_workers,
             )
         )
         cmd_peaks(
@@ -284,8 +291,201 @@ def cmd_pipeline(args):
         )
 
     if args.save_bigwig is not None:
-        bw_prefix = args.save_bigwig[:-len(".prob.bw")] if args.save_bigwig.endswith(".prob.bw") else args.save_bigwig
+        bw_prefix = (
+            args.save_bigwig[: -len(".prob.bw")]
+            if args.save_bigwig.endswith(".prob.bw")
+            else args.save_bigwig
+        )
         _run(bw_prefix)
     else:
         with tempfile.TemporaryDirectory() as tmpdir:
             _run(os.path.join(tmpdir, "tmp"))
+
+
+def cmd_fdr(args):
+    """Run the ``fdr`` subcommand: estimate empirical FDR from a probability bigWig.
+
+    Summarises bigWig scores over candidate peaks and a shuffled null set,
+    then estimates FDR(t) = min(1, N_null(t) / N_real(t)) across thresholds.
+    Prints the score threshold at the requested FDR target. Optionally writes a
+    TSV table and/or an FDR-vs-threshold figure.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments. Expected attributes:
+
+        ``bigwig`` (str)
+            Path to the probability bigWig file.
+        ``peaks`` (str)
+            Path to the candidate peak BED file (optionally .gz).
+        ``stat`` (str)
+            Summary statistic per peak; ``"max"`` or ``"mean"``.
+        ``n_shuffle`` (int)
+            Number of independent genome shuffles to average over.
+        ``seed`` (int)
+            Random seed for shuffling.
+        ``fdr_target`` (float)
+            FDR target for reporting the score threshold.
+        ``n_thresholds`` (int)
+            Number of evenly-spaced thresholds to evaluate.
+        ``output`` (str or None)
+            Path to write TSV table of threshold/FDR/N_real/N_null.
+        ``figure`` (str or None)
+            Path to save FDR-vs-threshold plot.
+        ``chroms`` (list of str or None)
+            Chromosome whitelist; ``None`` uses all chromosomes in the bigWig.
+        ``verbose`` (bool)
+            Whether to print per-chromosome progress.
+    """
+    bw = pybigtools.open(args.bigwig)
+    chrom_sizes = dict(bw.chroms())
+    chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
+
+    peaks_df = pd.read_csv(
+        args.peaks,
+        sep="\t",
+        header=None,
+        usecols=[0, 1, 2],
+        names=["chrom", "start", "end"],
+        compression="infer",
+    )
+    peaks_df = peaks_df[peaks_df["chrom"].isin(chroms)].reset_index(drop=True)
+
+    if len(peaks_df) == 0:
+        print("No peaks found on the requested chromosomes.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.verbose:
+        print(
+            f"Scoring {len(peaks_df):,} real peaks from {args.bigwig}...",
+            flush=True,
+        )
+    real_scores = score_peaks(bw, peaks_df, chrom_sizes, args.stat, chroms)
+    real_scores = real_scores[~np.isnan(real_scores)]
+
+    if len(real_scores) == 0:
+        print("All real peak scores are NaN; check bigWig coverage.", file=sys.stderr)
+        sys.exit(1)
+
+    rng = np.random.default_rng(args.seed)
+    null_score_lists = []
+    for i in range(args.n_shuffle):
+        if args.verbose:
+            print(f"  Shuffle {i + 1}/{args.n_shuffle}...", flush=True)
+        null_df = shuffle_peaks(peaks_df, chrom_sizes, chroms, rng)
+        s = score_peaks(
+            bw, null_df, chrom_sizes, args.stat, chroms, verbose=args.verbose
+        )
+        null_score_lists.append(s[~np.isnan(s)])
+    bw.close()
+
+    null_scores = np.concatenate(null_score_lists)
+    thresholds, n_real, n_null, fdr = compute_fdr(
+        real_scores, null_scores, args.n_shuffle, args.n_thresholds
+    )
+
+    # ---- Find threshold at FDR target ----
+    passing = np.where(fdr <= args.fdr_target)[0]
+    if len(passing) == 0:
+        threshold_at_target = float("nan")
+        n_peaks_at_target = 0
+    else:
+        first_pass = passing[0]
+        threshold_at_target = float(thresholds[first_pass])
+        n_peaks_at_target = int(n_real[first_pass])
+
+    # ---- Print summary ----
+    print(f"Real peaks:       {len(real_scores):,}")
+    print(f"Null peaks:       {len(null_scores):,} ({args.n_shuffle} shuffle(s))")
+    print(f"Score stat:       {args.stat}")
+    print(f"FDR target:       {args.fdr_target:.3f}")
+    if np.isnan(threshold_at_target):
+        print(f"Score threshold:  N/A (FDR {args.fdr_target} never reached)")
+    else:
+        print(f"Score threshold:  {threshold_at_target:.6f}")
+        print(f"Peaks at target:  {n_peaks_at_target:,}")
+
+    # ---- Optional TSV output ----
+    if args.output is not None:
+        table = pd.DataFrame(
+            {
+                "threshold": thresholds,
+                "n_real": n_real.astype(int),
+                "n_null": n_null,
+                "fdr": fdr,
+            }
+        )
+        table.to_csv(args.output, sep="\t", index=False, float_format="%.6g")
+        print(f"Saved FDR table to {args.output}")
+
+    # ---- Optional figure ----
+    if args.figure is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        fig.suptitle(args.bigwig, fontsize=9)
+
+        # Left — score distributions
+        ax = axes[0]
+        bins = np.linspace(thresholds[0], thresholds[-1], 60)
+        ax.hist(
+            real_scores,
+            bins=bins,
+            density=True,
+            alpha=0.6,
+            color="steelblue",
+            label="real",
+        )
+        if len(null_scores) > 0:
+            ax.hist(
+                null_scores,
+                bins=bins,
+                density=True,
+                alpha=0.5,
+                color="salmon",
+                label="null",
+            )
+        if not np.isnan(threshold_at_target):
+            ax.axvline(
+                threshold_at_target,
+                color="black",
+                linestyle="--",
+                linewidth=1,
+                label=f"t={threshold_at_target:.3f} (FDR={args.fdr_target})",
+            )
+        ax.set_xlabel(f"Peak score ({args.stat})")
+        ax.set_ylabel("Density")
+        ax.set_title("Score distributions")
+        ax.legend(fontsize=8)
+
+        # Right — FDR curve
+        ax = axes[1]
+        ax.plot(thresholds, fdr, color="black", linewidth=1.5)
+        ax.axhline(
+            args.fdr_target,
+            color="firebrick",
+            linestyle="--",
+            linewidth=0.8,
+            label=f"FDR={args.fdr_target}",
+        )
+        if not np.isnan(threshold_at_target):
+            ax.axvline(
+                threshold_at_target,
+                color="grey",
+                linestyle="--",
+                linewidth=0.8,
+                label=f"t={threshold_at_target:.3f}",
+            )
+        ax.set_xlabel(f"Score threshold ({args.stat})")
+        ax.set_ylabel("Empirical FDR")
+        ax.set_title("FDR vs threshold")
+        ax.set_ylim(0, 1.05)
+        ax.legend(fontsize=8)
+
+        plt.tight_layout()
+        fig.savefig(args.figure, dpi=150)
+        print(f"Saved figure to {args.figure}")

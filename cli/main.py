@@ -7,16 +7,16 @@ Transcription Run-On Generates Detector Of Regulatory elements (TROGDOR) is a
 deep learning method for identifying transcription initiation regions from
 nascent RNA sequencing methods such as GRO-seq, PRO-seq, or ChRO-seq. It was
 inspired by the dREG/dREG-HD family of SVM-based TIR detectors and uses many
-of ideas from those methods. TROGDOR has been reimplemented using a pytorch
-backend and is significantly better documented and easier to install than prior
-methods. This command-line tool provides a convenient wrapper for the core
-TROGDOR model. It takes in bigWig files of nascent RNA sequencing data and
-outputs imputed transcription initiation sites.
+ideas from those methods. TROGDOR has been implemented as a deep neural network
+using a PyTorch backend and is significantly better documented and easier to
+install than these prior methods. This command-line tool provides a convenient
+wrapper for the core TROGDOR model. It takes in bigWig files of nascent RNA
+sequencing data and outputs imputed TIRs.
 """
 
 import argparse
 
-from cli.commands import cmd_peaks, cmd_pipeline, cmd_score
+from cli.commands import cmd_fdr, cmd_peaks, cmd_pipeline, cmd_score
 
 _help = """
 The following commands are available:
@@ -122,6 +122,13 @@ def cli():
         help="If provided, save the intermediate probability bigWig to this path instead of a temp file.",
     )
     parser_pipeline.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help="Number of DataLoader worker processes for chunk preprocessing (default: 0). "
+             "Set to 1–4 on Linux/CUDA for additional throughput.",
+    )
+    parser_pipeline.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -210,6 +217,13 @@ def cli():
         help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.95)",
     )
     parser_score.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help="Number of DataLoader worker processes for chunk preprocessing (default: 0). "
+             "Set to 1–4 on Linux/CUDA for additional throughput.",
+    )
+    parser_score.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
     )
     parser_score.set_defaults(func=cmd_score)
@@ -242,11 +256,76 @@ def cli():
 
     # =============================================================================
 
-    _ALIASES = {"burninate", "thatch", "consummate_vs"}
+    # fdr (alias: fdr_bw)
+    parser_fdr = subparsers.add_parser(
+        "fdr",
+        aliases=["fdr_bw"],
+        help="Estimate empirical FDR from a probability bigWig and a candidate peak BED",
+    )
+    parser_fdr.add_argument(
+        "-b", "--bigwig", required=True, help="Probability bigWig file"
+    )
+    parser_fdr.add_argument(
+        "-t", "--peaks", required=True, help="Candidate peak BED file (optionally .gz)"
+    )
+    parser_fdr.add_argument(
+        "--stat",
+        choices=["max", "mean"],
+        default="max",
+        help="Summary statistic per peak (default: max)",
+    )
+    parser_fdr.add_argument(
+        "--n_shuffle",
+        type=int,
+        default=1,
+        help="Number of independent genome shuffles to average over (default: 1)",
+    )
+    parser_fdr.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for shuffling (default: 0)",
+    )
+    parser_fdr.add_argument(
+        "--fdr_target",
+        type=float,
+        default=0.05,
+        help="FDR target for reporting the score threshold (default: 0.05)",
+    )
+    parser_fdr.add_argument(
+        "--n_thresholds",
+        type=int,
+        default=200,
+        help="Number of evenly-spaced thresholds to evaluate (default: 200)",
+    )
+    parser_fdr.add_argument(
+        "--output",
+        default=None,
+        help="Write TSV table of threshold/FDR/N_real/N_null to this path",
+    )
+    parser_fdr.add_argument(
+        "--figure",
+        default=None,
+        help="Save FDR-vs-threshold plot to this path (e.g. fdr_curve.png)",
+    )
+    parser_fdr.add_argument(
+        "--chroms",
+        nargs="+",
+        default=None,
+        help="Chromosome whitelist (default: all in bigWig)",
+    )
+    parser_fdr.add_argument(
+        "-v", "--verbose", action="store_true", help="Print per-chromosome progress"
+    )
+    parser_fdr.set_defaults(func=cmd_fdr)
+
+    # =============================================================================
+
+    _ALIASES = {"burninate", "thatch", "consummate_vs", "fdr_bw"}
     subparsers._choices_actions = [
         a for a in subparsers._choices_actions if a.dest not in _ALIASES
     ]
-    subparsers.metavar = "{pipeline,score,peaks}"
+    subparsers.metavar = "{pipeline,score,peaks,fdr}"
 
     args = parser.parse_args()
     args.func(args)
