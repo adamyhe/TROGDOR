@@ -3,7 +3,7 @@
 # Author: Adam He <adamyhe@gmail.com>
 
 """
-Transcription Run-On Generates Detector Of Regulatory elements (TROGDOR) is a
+Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR) is a
 deep learning method for identifying transcription initiation regions from
 nascent RNA sequencing methods such as GRO-seq, PRO-seq, or ChRO-seq. It was
 inspired by the dREG/dREG-HD family of SVM-based TIR detectors and uses many
@@ -23,6 +23,7 @@ The following commands are available:
     pipeline / burninate      Run the full TROGDOR pipeline from raw data to peak calls
     score / thatch            Score positions using a pre-trained TROGDOR model
     peaks / consummate_vs     Call peaks from scored positions
+    fdr / fire_dragon         Calculate empirical FDR (requires ground truth peaks)
 """
 
 
@@ -58,14 +59,14 @@ def cli():
         "--pl_bigwig",
         required=True,
         type=str,
-        help="bigWig file of nascent RNA sequencing data (plus strand)",
+        help="bigWig file of nascent RNA sequencing data 3'-end coverage (plus strand)",
     )
     parser_pipeline.add_argument(
         "-m",
         "--mn_bigwig",
         required=True,
         type=str,
-        help="bigWig file of nascent RNA sequencing data (minus strand)",
+        help="bigWig file of nascent RNA sequencing data 3'-end coverage (minus strand)",
     )
     parser_pipeline.add_argument(
         "-o",
@@ -214,7 +215,16 @@ def cli():
         "--min_score",
         type=float,
         default=0.95,
-        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.95)",
+        help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.95)"
+        " Should be explicitly set to 0 for use with FDR calculation tool (in which case this command will be"
+        " slow and use more RAM.",
+    )
+    parser_score.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help="Number of DataLoader worker processes for chunk preprocessing (default: 0). "
+        "Set to 1–4 on Linux/CUDA for additional throughput.",
     )
     parser_score.add_argument(
         "--num_workers",
@@ -259,7 +269,7 @@ def cli():
     # fdr (alias: fdr_bw)
     parser_fdr = subparsers.add_parser(
         "fdr",
-        aliases=["fdr_bw"],
+        aliases=["fire_dragon"],
         help="Estimate empirical FDR from a probability bigWig and a candidate peak BED",
     )
     parser_fdr.add_argument(
@@ -321,7 +331,7 @@ def cli():
 
     # =============================================================================
 
-    _ALIASES = {"burninate", "thatch", "consummate_vs", "fdr_bw"}
+    _ALIASES = {"burninate", "thatch", "consummate_vs", "fire_dragon"}
     subparsers._choices_actions = [
         a for a in subparsers._choices_actions if a.dest not in _ALIASES
     ]

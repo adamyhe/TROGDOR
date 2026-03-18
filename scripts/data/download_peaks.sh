@@ -24,9 +24,8 @@ grep -E "PLS|ELS" "$DATA_DIR/K562_ENCODE_cCRE.hg38.bed"   > "$DATA_DIR/K562_ENCO
 grep -E "PLS|ELS" "$DATA_DIR/HeLa_ENCODE_cCRE.hg38.bed"   > "$DATA_DIR/HeLa_ENCODE_prom_enh.hg38.bed"
 
 # Convert hg38 -> hg19 via liftOver
-# Requires liftOver and hg38ToHg19.over.chain.gz (UCSC)
+# Requires liftOver; run download_genome.sh first to fetch the chain file
 CHAIN="${DATA_DIR}/hg38ToHg19.over.chain.gz"
-wget -q https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg38ToHg19.over.chain.gz -O "$CHAIN"
 
 for CELL in GM12878 K562 HeLa; do
     liftOver \
