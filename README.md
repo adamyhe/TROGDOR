@@ -1,6 +1,6 @@
 # TROGDOR
 
-Transcription Run-On Generates Detector Of Regulatory elements (TROGDOR).
+Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR).
 
 https://www.youtube.com/watch?v=90X5NJleYJQ
 
@@ -12,6 +12,12 @@ performance at predicting TIRs while maintaining computational efficiency.
 ## Installation
 
 We recommend installing inside an isolated Python environment (conda, venv, or uv):
+
+```bash
+pip install trogdor
+```
+
+Or install the latest development version directly from GitHub:
 
 ```bash
 pip install git+https://github.com/adamyhe/TROGDOR.git

@@ -9,6 +9,12 @@ TROGDOR is a deep learning method for identifying transcription initiation regio
 ## Installation
 
 ```bash
+pip install trogdor
+```
+
+For development (editable install from source):
+
+```bash
 pip install -e .
 ```
 
@@ -30,6 +36,7 @@ trogdor peaks -i scores.bw -o peaks.bed.gz --fdr_threshold 0.05
 ```
 
 Example (FDR estimation):
+
 ```bash
 trogdor fdr -b scores.bw -t candidate_peaks.bed.gz --fdr_target 0.05 --output fdr_table.tsv --figure fdr_curve.png
 ```
@@ -37,6 +44,7 @@ trogdor fdr -b scores.bw -t candidate_peaks.bed.gz --fdr_target 0.05 --output fd
 The `fdr` subcommand scores each candidate peak with the summary statistic (`--stat max` or `mean`), then shuffles those peaks within chromosome bounds to build a null distribution. FDR at threshold `t` is estimated as `min(1, N_null(t) / N_real(t))`, averaged over `--n_shuffle` independent shuffles (default 1). The score threshold at the target FDR is printed to stdout.
 
 Example (full pipeline):
+
 ```bash
 trogdor pipeline -M model.torch -p plus.bw -m minus.bw -o sample.peaks.bed.gz -d cuda
 # writes sample.peaks.bed.gz; intermediate bigWig is written to a temp file

@@ -19,7 +19,6 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/GSM3518118/suppl/GSM3518118%5FN%5FtCTD%5F2%5FCTAGCT%5F2%5FK562%5Fwildtype.minus.bw -O "$DATA_DIR"/K562_mnetseq_2.mn.bw
 
 CHROM_SIZES="${DATA_DIR}/hg38.chrom.sizes"
-wget -q https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes -O "$CHROM_SIZES"
 
 bigWigMerge "$DATA_DIR"/K562_mnetseq_1.pl.bw "$DATA_DIR"/K562_mnetseq_2.pl.bw "$DATA_DIR"/K562_mnetseq.pl.bg
 bigWigMerge --threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
