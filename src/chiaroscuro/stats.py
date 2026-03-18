@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 
-def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose):
+def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose=False):
     """Return an array of per-peak summary scores from the bigWig.
 
     Peaks not present in the bigWig or with zero length are assigned NaN.

@@ -374,7 +374,9 @@ def cmd_fdr(args):
         if args.verbose:
             print(f"  Shuffle {i + 1}/{args.n_shuffle}...", flush=True)
         null_df = shuffle_peaks(peaks_df, chrom_sizes, chroms, rng)
-        s = score_peaks(bw, null_df, chrom_sizes, args.stat, chroms, False)
+        s = score_peaks(
+            bw, null_df, chrom_sizes, args.stat, chroms, verbose=args.verbose
+        )
         null_score_lists.append(s[~np.isnan(s)])
     bw.close()
 
