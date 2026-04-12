@@ -20,7 +20,6 @@ import torch
 from torcheval.metrics.functional import binary_auprc
 
 from chiaroscuro.data_transforms import normalization
-from chiaroscuro.predict import predict
 from chiaroscuro.utils import encode_labels, load_model
 
 # ---------------------------------------------------------------------------
@@ -189,8 +188,10 @@ def run_chunks(
     X_all = torch.stack(chunks)  # (n_chunks, 2, chunk_size)
 
     # Batched inference — returns (n_chunks, 1, out_chunk) on CPU
-    preds = predict(model, X_all, batch_size=batch_size, device=device, verbose=False)
-    preds = torch.sigmoid(preds).squeeze(1).numpy()  # (n_chunks, out_chunk)
+    all_preds = []
+    for i in range(0, len(X_all), batch_size):
+        all_preds.append(model(X_all[i : i + batch_size].to(device)).cpu())
+    preds = torch.sigmoid(torch.cat(all_preds)).squeeze(1).numpy()  # (n_chunks, out_chunk)
 
     out_chunk = chunk_size // output_stride
     result = []

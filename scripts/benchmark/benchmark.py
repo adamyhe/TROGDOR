@@ -51,6 +51,18 @@ def parse_args():
         help="Chromosome whitelist (default: all in bigWig)",
     )
     p.add_argument(
+        "--chunk_size",
+        type=int,
+        default=262144,
+        help="Input chunk size in bp (default: 262144)",
+    )
+    p.add_argument(
+        "--overlap",
+        type=int,
+        default=32768,
+        help="Edge overlap in bp between consecutive chunks (default: 32768)",
+    )
+    p.add_argument(
         "--batch_size",
         type=int,
         default=8,
@@ -98,6 +110,8 @@ def main():
         args.mn_bigwig,
         chroms=args.chroms,
         output_stride=args.output_stride,
+        chunk_size=args.chunk_size,
+        overlap=args.overlap,
         batch_size=args.batch_size,
         transform=transform,
         device=args.device,

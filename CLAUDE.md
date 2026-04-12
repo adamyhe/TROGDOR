@@ -80,7 +80,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
 - `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
-- `src/chiaroscuro/predict.py` – `predict()` (batched inference, copied from tangermeme v1.0.2), `predict_chromosome()` (sliding-window chromosome scoring via DataLoader), and `predict_genome()` (genome-wide generator with background IO prefetch)
+- `src/chiaroscuro/predict.py` – `predict_chromosome()` (sliding-window chromosome scoring via DataLoader) and `predict_genome()` (genome-wide generator with background IO prefetch)
 - `src/chiaroscuro/stats.py` – Empirical FDR helpers: `score_peaks()` (summarise bigWig scores over a peak BED), `shuffle_peaks()` (randomise peak positions within chromosome bounds), `compute_fdr()` (build FDR curve from real and null scores)
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 

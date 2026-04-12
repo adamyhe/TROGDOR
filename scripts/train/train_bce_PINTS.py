@@ -29,7 +29,7 @@ args = parser.parse_args()
 
 TRAIN_SAMPLES = ["G1", "G2", "G3", "G5"]
 VAL_SAMPLES = ["G6"]
-TSS_BED = os.path.join(DATA_DIR, "K562.positive.bed.gz")
+TSS_BED = os.path.join(DATA_DIR, "ENCSR220XSM_peaks.hg19.bed")
 
 train_pl = [os.path.join(DATA_DIR, f"{s}.pl.bw") for s in TRAIN_SAMPLES]
 train_mn = [os.path.join(DATA_DIR, f"{s}.mn.bw") for s in TRAIN_SAMPLES]
@@ -98,7 +98,7 @@ else:
 # --- Model + optimizer ---
 
 model = TROGDOR(
-    name=f"{MODEL_DIR}/TROGDOR_BCE_{args.pos_weight}_{args.lr}", loss_fn=loss_fn
+    name=f"{MODEL_DIR}/TROGDOR_BCE_PINTS_{args.pos_weight}_{args.lr}", loss_fn=loss_fn
 ).cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
 

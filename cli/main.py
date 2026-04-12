@@ -259,7 +259,7 @@ def cli():
 
     # =============================================================================
 
-    # fdr (alias: fdr_bw)
+    # fdr (alias: fire dragon)
     parser_fdr = subparsers.add_parser(
         "fdr",
         aliases=["fire_dragon"],

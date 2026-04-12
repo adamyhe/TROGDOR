@@ -98,7 +98,15 @@ trogdor fdr -b mysample.prob.bw -t candidate_peaks.bed.gz --fdr_target 0.05
 
 ## Development/Model retraining
 
-Install development dependencies:
+Install needed UCSC tools:
+
+```bash
+mamba create trogdor
+mamba activate trogdor
+mamba install -c bioconda ucsc-liftover
+```
+
+Install TROGDOR with dev dependencies:
 
 ```bash
 git clone git@github.com:adamyhe/TROGDOR.git
