@@ -25,6 +25,13 @@ parser.add_argument(
 parser.add_argument(
     "--lr", type=float, default=1e-3, help="Learning rate. Default: 1e-3."
 )
+parser.add_argument(
+    "--val_interval",
+    type=int,
+    default=None,
+    help="Validate every N training steps in addition to epoch end. "
+         "Default: epoch end only.",
+)
 args = parser.parse_args()
 
 TRAIN_SAMPLES = ["G1", "G2", "G3", "G5"]
@@ -133,6 +140,7 @@ run = wandb.init(
         "loss_fn": "BCEWithLogitsLoss",
         "pos_weight": args.pos_weight,
         "window_size": WINDOW_SIZE,
+        "val_interval": args.val_interval,
     },
 )
 
@@ -147,5 +155,6 @@ model.fit(
     verbose=True,
     wandb_run=run,
     scheduler=scheduler,
+    val_interval=args.val_interval,
 )
 run.finish()

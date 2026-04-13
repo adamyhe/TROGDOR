@@ -184,6 +184,105 @@ class TROGDOR(torch.nn.Module):
 
         return self.head(X)
 
+    def _validate(
+        self,
+        val_data,
+        _fn,
+        bf16,
+        epoch,
+        iteration,
+        train_loss_avg,
+        train_time,
+        wandb_run,
+        best_auprc,
+        early_stop_count,
+    ):
+        """Run one validation pass, log results, and checkpoint if improved.
+
+        Parameters
+        ----------
+        val_data : DataLoader
+        _fn : callable
+            Active loss function for this training run.
+        bf16 : bool
+        epoch : int
+            Current epoch index (for the logger row).
+        iteration : int
+            Global step count (for wandb step and the logger row).
+        train_loss_avg : float
+            Mean training loss since the last validation call.
+        train_time : float
+            Wall-clock seconds spent training since the last validation call.
+        wandb_run : wandb Run or None
+        best_auprc : float
+        early_stop_count : int
+
+        Returns
+        -------
+        best_auprc : float
+        early_stop_count : int
+        """
+        with torch.no_grad():
+            self.eval()
+
+            tic = time.time()
+            y_val, logits_val = [], []
+            for X_val, y_val_ in val_data:
+                X_val = X_val.cuda()
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
+                    logits_val.append(self(X_val))
+                y_val.append(y_val_.cuda())
+
+            y_val = torch.cat(y_val)
+            logits_val = torch.cat(logits_val)
+
+            val_loss_ = _fn(logits_val, y_val).item()
+
+            logits_flat = torch.sigmoid(logits_val.reshape(-1))
+            y_flat = y_val.reshape(-1).long()
+            val_auprc = binary_auprc(logits_flat, y_flat)
+
+            preds_flat = (logits_flat > 0.5).float()
+            y_flat_f = y_flat.float()
+            tp = (preds_flat * y_flat_f).sum()
+            val_dice = (2 * tp) / (preds_flat.sum() + y_flat_f.sum() + 1e-8)
+
+            val_time = time.time() - tic
+
+            self.logger.add(
+                [
+                    epoch,
+                    iteration,
+                    train_time,
+                    val_time,
+                    train_loss_avg,
+                    val_loss_,
+                    val_auprc.item(),
+                    val_dice.item(),
+                    (val_auprc.item() > best_auprc),
+                ]
+            )
+            self.logger.save(f"{self.name}.log")
+
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        "val/loss": val_loss_,
+                        "val/auprc": val_auprc.item(),
+                        "val/dice": val_dice.item(),
+                    },
+                    step=iteration,
+                )
+
+            if val_auprc.item() > best_auprc:
+                torch.save(self.state_dict(), f"{self.name}.torch")
+                best_auprc = val_auprc.item()
+                early_stop_count = 0
+            else:
+                early_stop_count += 1
+
+        return best_auprc, early_stop_count
+
     def fit(
         self,
         train_data,
@@ -198,6 +297,7 @@ class TROGDOR(torch.nn.Module):
         scheduler=None,
         loss_fn=None,
         loss_kwargs=None,
+        val_interval=None,
     ):
         """
         Fit the model to data and validate it periodically.
@@ -236,6 +336,9 @@ class TROGDOR(torch.nn.Module):
             Keyword arguments forwarded to ``loss_fn`` via
             ``functools.partial``. Ignored when ``loss_fn`` is None.
             Default is None.
+        val_interval : int or None, optional
+            Run validation every this many training steps in addition to at
+            epoch end. ``None`` (default) validates at epoch end only.
         """
         iteration = 0
         early_stop_count = 0
@@ -248,9 +351,10 @@ class TROGDOR(torch.nn.Module):
             _fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
 
         for epoch in range(max_epochs):
-            tic = time.time()
-            epoch_loss = 0.0
-            epoch_batches = 0
+            interval_loss = 0.0
+            interval_batches = 0
+            tic_interval = time.time()
+            stop_early = False
 
             for data in train_data:
                 X, y = data
@@ -280,74 +384,31 @@ class TROGDOR(torch.nn.Module):
                         step=iteration,
                     )
 
-                epoch_loss += loss.item()
-                epoch_batches += 1
+                interval_loss += loss.item()
+                interval_batches += 1
                 iteration += 1
 
-            train_time = time.time() - tic
-            train_loss_avg = epoch_loss / max(epoch_batches, 1)
-
-            if verbose:
-                with torch.no_grad():
-                    self.eval()
-
-                    tic = time.time()
-                    y_val = []
-                    logits_val = []
-                    for X_val, y_val_ in val_data:
-                        X_val = X_val.cuda()
-                        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
-                            logits_val_ = self(X_val)
-                        logits_val.append(logits_val_)
-                        y_val.append(y_val_.cuda())
-
-                    y_val = torch.cat(y_val)
-                    logits_val = torch.cat(logits_val)
-
-                    val_loss_ = _fn(logits_val, y_val).item()
-
-                    logits_flat = torch.sigmoid(logits_val.reshape(-1))
-                    y_flat = y_val.reshape(-1).long()
-                    val_auprc = binary_auprc(logits_flat, y_flat)
-
-                    preds_flat = (logits_flat > 0.5).float()
-                    y_flat_f = y_flat.float()
-                    tp = (preds_flat * y_flat_f).sum()
-                    val_dice = (2 * tp) / (preds_flat.sum() + y_flat_f.sum() + 1e-8)
-
-                    val_time = time.time() - tic
-
-                    self.logger.add(
-                        [
-                            epoch,
-                            iteration,
-                            train_time,
-                            val_time,
-                            train_loss_avg,
-                            val_loss_,
-                            val_auprc.item(),
-                            val_dice.item(),
-                            (val_auprc.item() > best_auprc),
-                        ]
+                if val_interval is not None and iteration % val_interval == 0 and verbose:
+                    best_auprc, early_stop_count = self._validate(
+                        val_data, _fn, bf16, epoch, iteration,
+                        interval_loss / max(interval_batches, 1),
+                        time.time() - tic_interval,
+                        wandb_run, best_auprc, early_stop_count,
                     )
-                    self.logger.save(f"{self.name}.log")
+                    interval_loss = 0.0
+                    interval_batches = 0
+                    tic_interval = time.time()
+                    if early_stopping is not None and early_stop_count >= early_stopping:
+                        stop_early = True
+                        break
 
-                    if wandb_run is not None:
-                        wandb_run.log(
-                            {
-                                "val/loss": val_loss_,
-                                "val/auprc": val_auprc.item(),
-                                "val/dice": val_dice.item(),
-                            },
-                            step=iteration,
-                        )
-
-                    if val_auprc.item() > best_auprc:
-                        torch.save(self.state_dict(), f"{self.name}.torch")
-                        best_auprc = val_auprc.item()
-                        early_stop_count = 0
-                    else:
-                        early_stop_count += 1
+            if not stop_early and verbose and interval_batches > 0:
+                best_auprc, early_stop_count = self._validate(
+                    val_data, _fn, bf16, epoch, iteration,
+                    interval_loss / interval_batches,
+                    time.time() - tic_interval,
+                    wandb_run, best_auprc, early_stop_count,
+                )
 
             if early_stopping is not None and early_stop_count >= early_stopping:
                 break
