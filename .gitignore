@@ -1,6 +1,8 @@
 **/.DS_Store
 **/.vscode
 scripts/benchmark/*.txt
+predictions/
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
