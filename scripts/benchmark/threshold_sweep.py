@@ -14,18 +14,34 @@ a ground truth BED using a centre-window hit test.
   FDR     = fraction of predicted peaks whose centre-window hits no GT peak
             = 1 − precision
 
-Because the bigWig only stores bins above the ``--floor`` threshold (set by
-``trogdor score --min_score``), the sweep is limited to [floor, max_score].
-To get a wider sweep, re-score with a lower ``--min_score``.
+Two input modes are supported (exactly one must be provided):
 
-Example
--------
+  -b / --bigwig   TROGDOR probability bigWig (output of ``trogdor score``).
+                  The sweep is limited to the score range stored in the file;
+                  re-score with a lower ``--min_score`` for a wider sweep.
+
+  --dreg          dREG scored BED file.  dREG stores the centre 1 bp of each
+                  100 bp scored window as each BED entry; ``--dreg_window``
+                  controls the expansion half-width (default 50 bp).
+
+Examples
+--------
+# TROGDOR bigWig
 python scripts/benchmark/threshold_sweep.py \\
     -b predictions.prob.bw \\
     -t data/K562.positive.bed.gz \\
     --chroms chr1 chr2 \\
     --output sweep.tsv \\
     --figure sweep.png \\
+    -v
+
+# dREG scored BED
+python scripts/benchmark/threshold_sweep.py \\
+    --dreg sample.dREG.scores.bed.gz \\
+    -t data/K562.positive.bed.gz \\
+    --chroms chr1 chr2 \\
+    --output dreg_sweep.tsv \\
+    --figure dreg_sweep.png \\
     -v
 """
 
@@ -48,10 +64,25 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Sweep probability threshold; compute peak-level recall and FDR vs. ground truth."
     )
+    # ---- Input (mutually exclusive; exactly one required) -------------------
     p.add_argument(
-        "-b", "--bigwig", required=True,
-        help="Probability bigWig (output of `trogdor score`)",
+        "-b", "--bigwig", default=None,
+        help="Probability bigWig (output of `trogdor score`). Mutually exclusive with --dreg.",
     )
+    p.add_argument(
+        "--dreg", default=None, metavar="BED",
+        help="dREG scored BED file (centre 1 bp per scored region). Mutually exclusive with -b.",
+    )
+    p.add_argument(
+        "--dreg_window", type=int, default=50,
+        help="Half-width in bp to expand each dREG centre entry into its scored region "
+             "(default: 50, giving 100 bp windows).",
+    )
+    p.add_argument(
+        "--score_col", type=int, default=3,
+        help="0-based column index of the score in the dREG BED (default: 3).",
+    )
+    # ---- Common arguments ---------------------------------------------------
     p.add_argument(
         "-t", "--truth", required=True,
         help="Ground truth peak BED file (≥3 cols; chrom/start/end; optionally gzipped)",
@@ -66,7 +97,7 @@ def parse_args():
     )
     p.add_argument(
         "--chroms", nargs="+", default=None,
-        help="Chromosome whitelist (default: all chromosomes in the bigWig)",
+        help="Chromosome whitelist (default: all chromosomes in the scored input)",
     )
     p.add_argument(
         "--output", default=None,
@@ -130,27 +161,98 @@ def read_bigwig_intervals(bw_path, chroms, verbose):
     return chrom_sizes, scored
 
 
+def read_dreg_intervals(bed_path, chroms, score_col, verbose):
+    """Read a dREG scored BED into the same per-chrom interval format.
+
+    dREG stores the centre 1 bp of each scored window as each BED entry.
+    Expansion from 1 bp to the full scored region happens at peak-calling
+    time via ``call_peaks_at_threshold(expand=dreg_window)``.
+
+    Parameters
+    ----------
+    bed_path : str
+        Path to the dREG scored BED file (optionally gzipped).
+    chroms : list of str
+        Chromosomes to load.
+    score_col : int
+        0-based column index of the score (default 3 = 4th column).
+    verbose : bool
+
+    Returns
+    -------
+    scored : dict[str, list of (int, int, float)]
+        Per-chrom sorted lists of (start, end, score) tuples.
+    """
+    df = pd.read_csv(
+        bed_path,
+        sep="\t",
+        header=None,
+        compression="infer",
+        usecols=[0, 1, 2, score_col],
+        dtype={0: str, 1: int, 2: int, score_col: float},
+    )
+    df.columns = ["chrom", "start", "end", "score"]
+    df = df.dropna(subset=["score"])
+
+    scored = {}
+    for chrom in chroms:
+        sub = df[df["chrom"] == chrom].sort_values("start")
+        if len(sub) == 0:
+            if verbose:
+                print(f"  Skipping {chrom} (not in dREG BED)", flush=True)
+            continue
+        if verbose:
+            print(f"  {chrom}: {len(sub):,} dREG entries", flush=True)
+        scored[chrom] = list(zip(sub["start"], sub["end"], sub["score"]))
+    return scored
+
+
 # ---------------------------------------------------------------------------
 # Peak calling at a threshold
 # ---------------------------------------------------------------------------
 
 
-def call_peaks_at_threshold(scored_intervals, threshold):
-    """Filter bigWig intervals to score ≥ threshold and merge abutting bins.
+def _merge_overlapping(intervals):
+    """Merge overlapping or abutting sorted intervals, keeping max score.
+
+    Unlike ``merge_intervals`` in utils.py (which handles only exactly-abutting
+    intervals), this function handles the general overlapping case needed after
+    dREG entries are expanded to their full window width.
+    """
+    if not intervals:
+        return []
+    merged = [list(intervals[0])]
+    for s, e, v in intervals[1:]:
+        if s <= merged[-1][1]:          # overlaps or abuts
+            merged[-1][1] = max(merged[-1][1], e)
+            merged[-1][2] = max(merged[-1][2], v)
+        else:
+            merged.append([s, e, v])
+    return merged
+
+
+def call_peaks_at_threshold(scored_intervals, threshold, expand=0):
+    """Filter intervals to score ≥ threshold, optionally expand, and merge.
 
     Parameters
     ----------
     scored_intervals : list of (start, end, score)
-        Already sorted by start.  Adjacent intervals are assumed to share an
-        endpoint (i.e. bins are contiguous in genomic coordinate space).
+        Already sorted by start.
     threshold : float
+    expand : int, optional
+        Number of bp to add on each side of every passing interval before
+        merging.  Use ``dreg_window`` for dREG input; leave 0 for bigWig
+        input where bins are already full-width and exactly abutting.
 
     Returns
     -------
     list of [start, end, max_score]
-        Merged peak intervals (same format as merge_intervals output).
+        Merged peak intervals.
     """
-    passing = [(s, e, v) for s, e, v in scored_intervals if v >= threshold]
+    passing = [(s - expand, e + expand, v)
+               for s, e, v in scored_intervals if v >= threshold]
+    if expand > 0:
+        return _merge_overlapping(sorted(passing))
     return merge_intervals(passing)
 
 
@@ -218,33 +320,49 @@ def centre_window_hits(pred_peaks, truth_df, chrom, window):
 def main():
     args = parse_args()
 
-    # ---- Load truth --------------------------------------------------------
-    truth_df = read_truth(args.truth)
-
-    # ---- Load bigWig intervals ---------------------------------------------
-    bw = pybigtools.open(args.bigwig)
-    all_chroms = sorted(bw.chroms().keys())
-    bw.close()
-
-    chroms = args.chroms if args.chroms is not None else all_chroms
-    # Restrict to chromosomes present in truth so GT counts are meaningful
-    truth_chroms = set(truth_df["chrom"].unique())
-    chroms = [c for c in chroms if c in truth_chroms]
-
-    if not chroms:
-        print(
-            "No chromosomes shared between bigWig and ground truth BED.",
-            file=sys.stderr,
-        )
+    # ---- Validate mutually exclusive inputs --------------------------------
+    if (args.bigwig is None) == (args.dreg is None):
+        print("Exactly one of -b/--bigwig or --dreg must be provided.", file=sys.stderr)
         sys.exit(1)
 
-    if args.verbose:
-        print(f"Loading bigWig intervals for {len(chroms)} chromosome(s)...", flush=True)
+    expand = args.dreg_window if args.dreg else 0
 
-    chrom_sizes, scored = read_bigwig_intervals(args.bigwig, chroms, args.verbose)
+    # ---- Load truth --------------------------------------------------------
+    truth_df = read_truth(args.truth)
+    truth_chroms = set(truth_df["chrom"].unique())
+
+    # ---- Determine chromosome list and load scored intervals ---------------
+    if args.bigwig:
+        bw = pybigtools.open(args.bigwig)
+        all_chroms = sorted(bw.chroms().keys())
+        bw.close()
+        chroms = args.chroms if args.chroms is not None else all_chroms
+        chroms = [c for c in chroms if c in truth_chroms]
+        if not chroms:
+            print("No chromosomes shared between bigWig and ground truth BED.", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print(f"Loading bigWig intervals for {len(chroms)} chromosome(s)...", flush=True)
+        _, scored = read_bigwig_intervals(args.bigwig, chroms, args.verbose)
+    else:
+        # dREG: derive chromosome list from truth (or user whitelist)
+        df_tmp = pd.read_csv(
+            args.dreg, sep="\t", header=None, compression="infer",
+            usecols=[0], dtype={0: str},
+        )
+        dreg_chroms = set(df_tmp.iloc[:, 0].unique())
+        all_chroms = sorted(dreg_chroms)
+        chroms = args.chroms if args.chroms is not None else all_chroms
+        chroms = [c for c in chroms if c in truth_chroms]
+        if not chroms:
+            print("No chromosomes shared between dREG BED and ground truth BED.", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print(f"Loading dREG intervals for {len(chroms)} chromosome(s)...", flush=True)
+        scored = read_dreg_intervals(args.dreg, chroms, args.score_col, args.verbose)
 
     if not scored:
-        print("No scored intervals found in bigWig for the requested chromosomes.", file=sys.stderr)
+        print("No scored intervals found for the requested chromosomes.", file=sys.stderr)
         sys.exit(1)
 
     # ---- Build threshold grid from observed score range --------------------
@@ -256,9 +374,10 @@ def main():
     score_max = float(all_scores.max())
 
     if args.verbose:
+        source = "bigWig" if args.bigwig else "dREG BED"
         print(
-            f"Score range in bigWig: [{score_min:.4f}, {score_max:.4f}] "
-            f"across {len(all_scores):,} bins",
+            f"Score range in {source}: [{score_min:.4f}, {score_max:.4f}] "
+            f"across {len(all_scores):,} entries",
             flush=True,
         )
 
@@ -287,7 +406,7 @@ def main():
         gt_recalled_flags = []
 
         for chrom, ivals in scored.items():
-            peaks = call_peaks_at_threshold(ivals, thr)
+            peaks = call_peaks_at_threshold(ivals, thr, expand=expand)
             if len(peaks) == 0:
                 # Count GT peaks on this chrom as un-recalled
                 n_gt_chrom = (truth_df["chrom"] == chrom).sum()
