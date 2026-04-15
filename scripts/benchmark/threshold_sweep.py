@@ -103,6 +103,15 @@ def parse_args():
         help="Number of evenly spaced threshold levels to evaluate (default: 100)",
     )
     p.add_argument(
+        "--min_peaks",
+        type=int,
+        default=10,
+        help="Minimum number of predicted peaks required to include a threshold level in the "
+             "PRC plot and AUPRC calculation.  Thresholds producing fewer peaks have noisy "
+             "precision estimates and cause the curve to collapse toward (0, 0).  "
+             "Default: 10.",
+    )
+    p.add_argument(
         "--window",
         type=int,
         default=200,
@@ -538,13 +547,19 @@ def main():
         ax.set_title("Peak count vs. threshold", fontsize=9)
 
         # Panel 3: precision–recall curve (peak-level)
+        # Drop the high-threshold tail where too few peaks are called (noisy precision),
+        # then anchor the curve at (recall=0, precision=1) — the conventional endpoint
+        # when no peaks are predicted (zero false positives by definition).
         ax = axes[2]
         from sklearn.metrics import auc
 
-        auprc = auc(valid["recall"].to_numpy(), valid["precision"].to_numpy())
+        prc_data = valid[valid["n_pred_peaks"] >= args.min_peaks].copy()
+        anchor = pd.DataFrame([{"recall": 0.0, "precision": 1.0}])
+        prc_sorted = pd.concat([anchor, prc_data.sort_values("recall")], ignore_index=True)
+        auprc = auc(prc_sorted["recall"].to_numpy(), prc_sorted["precision"].to_numpy())
         ax.plot(
-            valid["recall"],
-            valid["precision"],
+            prc_sorted["recall"],
+            prc_sorted["precision"],
             color="steelblue",
             marker="o",
             markersize=2,
