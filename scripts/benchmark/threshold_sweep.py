@@ -52,7 +52,6 @@ import numpy as np
 import pandas as pd
 import pybigtools
 
-from chiaroscuro.utils import merge_intervals
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -101,6 +100,14 @@ def parse_args():
         type=int,
         default=100,
         help="Number of evenly spaced threshold levels to evaluate (default: 100)",
+    )
+    p.add_argument(
+        "--score_floor",
+        type=float,
+        default=None,
+        help="Minimum score threshold to include in the sweep.  Useful for dREG logit input "
+             "where very low thresholds produce enormous merged peaks that break the "
+             "centre-window hit test.  Default: None (use the minimum observed score).",
     )
     p.add_argument(
         "--min_peaks",
@@ -236,107 +243,78 @@ def read_dreg_intervals(bed_path, chroms, score_col, verbose):
 
 
 # ---------------------------------------------------------------------------
-# Peak calling at a threshold
+# Vectorised peak calling and hit test
 # ---------------------------------------------------------------------------
 
 
-def _merge_overlapping(intervals):
-    """Merge overlapping or abutting sorted intervals, keeping max score.
-
-    Unlike ``merge_intervals`` in utils.py (which handles only exactly-abutting
-    intervals), this function handles the general overlapping case needed after
-    dREG entries are expanded to their full window width.
-    """
-    if not intervals:
-        return []
-    merged = [list(intervals[0])]
-    for s, e, v in intervals[1:]:
-        if s <= merged[-1][1]:  # overlaps or abuts
-            merged[-1][1] = max(merged[-1][1], e)
-            merged[-1][2] = max(merged[-1][2], v)
-        else:
-            merged.append([s, e, v])
-    return merged
-
-
-def call_peaks_at_threshold(scored_intervals, threshold, expand=0):
-    """Filter intervals to score ≥ threshold, optionally expand, and merge.
+def _merge_peaks_np(starts, ends, scores, threshold, expand=0):
+    """Filter to score ≥ threshold, expand, and merge into peaks.
 
     Parameters
     ----------
-    scored_intervals : list of (start, end, score)
-        Already sorted by start.
+    starts, ends, scores : np.ndarray
+        Pre-sorted (by start) interval arrays for one chromosome.
     threshold : float
-    expand : int, optional
-        Number of bp to add on each side of every passing interval before
-        merging.  Use ``dreg_window`` for dREG input; leave 0 for bigWig
-        input where bins are already full-width and exactly abutting.
+    expand : int
+        Bases to add on each side before merging (dREG window expansion).
 
     Returns
     -------
-    list of [start, end, max_score]
-        Merged peak intervals.
+    peak_starts, peak_ends, peak_scores : np.ndarray
+        Merged peak arrays.  Empty arrays (length 0) when nothing passes.
     """
-    passing = [
-        (s - expand, e + expand, v) for s, e, v in scored_intervals if v >= threshold
-    ]
-    if expand > 0:
-        return _merge_overlapping(sorted(passing))
-    return merge_intervals(passing)
+    _empty = (np.empty(0, np.int64), np.empty(0, np.int64), np.empty(0, np.float32))
+    mask = scores >= threshold
+    if not mask.any():
+        return _empty
+    ps = starts[mask] - expand
+    pe = ends[mask] + expand
+    pv = scores[mask]
+    # Group boundaries: new group wherever next start > current end
+    group_idx = np.concatenate([[0], np.where(ps[1:] > pe[:-1])[0] + 1])
+    return (
+        ps[group_idx],
+        np.maximum.reduceat(pe, group_idx),
+        np.maximum.reduceat(pv, group_idx),
+    )
 
 
-# ---------------------------------------------------------------------------
-# Centre-window hit test
-# ---------------------------------------------------------------------------
-
-
-def centre_window_hits(pred_peaks, truth_df, chrom, window):
-    """Return hit arrays for predicted peaks and ground truth peaks on *chrom*.
-
-    A predicted peak is a "hit" (TP) if a ±window bp window around its centre
-    overlaps any GT interval.  A GT peak is "recalled" if it is overlapped by
-    at least one predicted centre window.
+def _centre_window_hits_np(peak_starts, peak_ends, gt_starts, gt_ends, window):
+    """Vectorised centre-window hit test.
 
     Parameters
     ----------
-    pred_peaks : list of [start, end, score]
-        Merged predicted peaks on this chromosome.
-    truth_df : pd.DataFrame
-        Columns chrom/start/end for all chromosomes.
-    chrom : str
+    peak_starts, peak_ends : np.ndarray
+        Merged predicted peak coordinates for one chromosome.
+    gt_starts, gt_ends : np.ndarray
+        Ground-truth peak coordinates, sorted by start.
     window : int
+        Half-width of the centre window in bp.
 
     Returns
     -------
     pred_hits : np.ndarray of bool, shape (n_pred,)
-    gt_recalled : np.ndarray of bool, shape (n_gt_on_chrom,)
+    gt_recalled : np.ndarray of bool, shape (n_gt,)
     """
-    gt = truth_df[truth_df["chrom"] == chrom].sort_values("start")
-    n_gt = len(gt)
-    n_pred = len(pred_peaks)
-
+    n_pred = len(peak_starts)
+    n_gt = len(gt_starts)
     if n_pred == 0:
-        return np.empty(0, dtype=bool), np.zeros(n_gt, dtype=bool)
+        return np.empty(0, bool), np.zeros(n_gt, bool)
     if n_gt == 0:
-        return np.zeros(n_pred, dtype=bool), np.empty(0, dtype=bool)
+        return np.zeros(n_pred, bool), np.empty(0, bool)
 
-    gt_starts = gt["start"].to_numpy()
-    gt_ends = gt["end"].to_numpy()
+    centres = (peak_starts + peak_ends) // 2
+    ws = centres - window
+    we = centres + window  # half-open [ws, we)
 
-    pred_hits = np.zeros(n_pred, dtype=bool)
-    gt_recalled = np.zeros(n_gt, dtype=bool)
+    # Vectorised binary search over all peaks at once
+    lo = np.searchsorted(gt_ends,    ws + 1, side="left")   # ge > ws
+    hi = np.searchsorted(gt_starts,  we,     side="left")   # gs < we
 
-    for i, (ps, pe, _) in enumerate(pred_peaks):
-        centre = (ps + pe) // 2
-        ws, we = centre - window, centre + window  # half-open [ws, we)
-
-        # GT intervals [gs, ge) that overlap [ws, we): gs < we AND ge > ws
-        lo = np.searchsorted(gt_ends, ws + 1, side="left")  # ge > ws
-        hi = np.searchsorted(gt_starts, we, side="left")  # gs < we
-
-        if lo < hi:
-            pred_hits[i] = True
-            gt_recalled[lo:hi] = True
+    pred_hits   = lo < hi
+    gt_recalled = np.zeros(n_gt, bool)
+    for i in np.where(pred_hits)[0]:                        # loop only over TPs
+        gt_recalled[lo[i] : hi[i]] = True
 
     return pred_hits, gt_recalled
 
@@ -411,25 +389,51 @@ def main():
         )
         sys.exit(1)
 
+    # ---- Pre-process: convert interval lists to sorted numpy arrays --------
+    # Done once here so the threshold sweep only does fast numpy operations.
+    processed = {}
+    for chrom, ivals in scored.items():
+        arr = np.array(ivals, dtype=np.float64)          # (N, 3): start, end, score
+        order = np.argsort(arr[:, 0], kind="stable")     # sort by start (usually already sorted)
+        processed[chrom] = (
+            arr[order, 0].astype(np.int64),
+            arr[order, 1].astype(np.int64),
+            arr[order, 2].astype(np.float32),
+        )
+
+    # Pre-compute GT arrays per chrom (avoids repeated pandas queries in the hot loop)
+    gt_arrays = {}
+    for chrom in processed:
+        gt_sub = truth_df[truth_df["chrom"] == chrom].sort_values("start")
+        gt_arrays[chrom] = (
+            gt_sub["start"].to_numpy(dtype=np.int64),
+            gt_sub["end"].to_numpy(dtype=np.int64),
+        )
+
     # ---- Build threshold grid from observed score range --------------------
-    all_scores = np.concatenate(
-        [
-            np.array([v for _, _, v in ivals], dtype=np.float32)
-            for ivals in scored.values()
-        ]
-    )
+    all_scores = np.concatenate([scores for _, _, scores in processed.values()])
     score_min = float(all_scores.min())
     score_max = float(all_scores.max())
 
+    sweep_min = score_min if args.score_floor is None else max(score_min, args.score_floor)
+    if sweep_min >= score_max:
+        print(
+            f"--score_floor ({args.score_floor}) is >= maximum observed score "
+            f"({score_max:.4f}); no thresholds to evaluate.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if args.verbose:
         source = "bigWig" if args.bigwig else "dREG BED"
+        floor_note = f"  sweep from {sweep_min:.4f}" if args.score_floor is not None else ""
         print(
-            f"Score range in {source}: [{score_min:.4f}, {score_max:.4f}] "
-            f"across {len(all_scores):,} entries",
+            f"Score range in {source}: [{score_min:.4f}, {score_max:.4f}]"
+            f"{floor_note}  ({len(all_scores):,} entries)",
             flush=True,
         )
 
-    thresholds = np.linspace(score_min, score_max, args.n_thresholds)
+    thresholds = np.linspace(sweep_min, score_max, args.n_thresholds)
 
     # ---- Total GT peak count (fixed across thresholds) --------------------
     truth_on_chroms = truth_df[truth_df["chrom"].isin(chroms)]
@@ -455,18 +459,18 @@ def main():
         n_pred_hits = 0  # predicted peaks that hit a GT peak (TP)
         gt_recalled_flags = []
 
-        for chrom, ivals in scored.items():
-            peaks = call_peaks_at_threshold(ivals, thr, expand=expand)
-            if len(peaks) == 0:
-                # Count GT peaks on this chrom as un-recalled
-                n_gt_chrom = (truth_df["chrom"] == chrom).sum()
-                gt_recalled_flags.append(np.zeros(n_gt_chrom, dtype=bool))
+        for chrom, (starts, ends, scores) in processed.items():
+            gt_s, gt_e = gt_arrays[chrom]
+            peak_s, peak_e, _ = _merge_peaks_np(starts, ends, scores, thr, expand)
+
+            if len(peak_s) == 0:
+                gt_recalled_flags.append(np.zeros(len(gt_s), bool))
                 continue
 
-            pred_hits, gt_recalled = centre_window_hits(
-                peaks, truth_df, chrom, args.window
+            pred_hits, gt_recalled = _centre_window_hits_np(
+                peak_s, peak_e, gt_s, gt_e, args.window
             )
-            n_pred_total += len(peaks)
+            n_pred_total += len(peak_s)
             n_pred_hits += int(pred_hits.sum())
             gt_recalled_flags.append(gt_recalled)
 
