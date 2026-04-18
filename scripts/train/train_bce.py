@@ -30,7 +30,7 @@ parser.add_argument(
     type=int,
     default=None,
     help="Validate every N training steps in addition to epoch end. "
-         "Default: epoch end only.",
+    "Default: epoch end only.",
 )
 args = parser.parse_args()
 
@@ -50,7 +50,7 @@ val_tss = [TSS_BED] * len(VAL_SAMPLES)
 MAX_EPOCHS = 20
 WARMUP_STEPS = 500
 BATCH_SIZE = 64  # halved from 64 to keep GPU memory constant with 2× window
-EARLY_STOPPING = 5
+EARLY_STOPPING = None
 WEIGHT_DECAY = 1e-4
 WINDOW_SIZE = 2**18  # 524288 bp (2× the original 2^18)
 

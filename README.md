@@ -1,5 +1,7 @@
 # TROGDOR
 
+[![PyPI](https://img.shields.io/pypi/v/trogdor)](https://pypi.org/project/trogdor/) [![Weights](https://img.shields.io/badge/%F0%9F%A4%97-Weights-yellow)](https://huggingface.co/adamyhe/TROGDOR)
+
 Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR).
 
 https://www.youtube.com/watch?v=90X5NJleYJQ
@@ -11,7 +13,13 @@ performance at predicting TIRs while maintaining computational efficiency.
 
 ## Installation
 
-We recommend installing inside an isolated Python environment (conda, venv, or uv):
+We recommend installing inside an isolated Python environment. With **uv** (fastest):
+
+```bash
+uv tool install trogdor
+```
+
+Or with pip inside a conda/venv environment:
 
 ```bash
 pip install trogdor
@@ -21,6 +29,8 @@ Or install the latest development version directly from GitHub:
 
 ```bash
 pip install git+https://github.com/adamyhe/TROGDOR.git
+# or with uv:
+uv tool install git+https://github.com/adamyhe/TROGDOR.git
 ```
 
 ## Usage
