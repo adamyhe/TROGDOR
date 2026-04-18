@@ -108,15 +108,15 @@ Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normal
 ## Development
 
 All Python commands, import checks, and CLI invocations must be run inside the
-`trogdor` conda environment:
+`torch` conda environment:
 
 ```bash
-conda run -n trogdor <command>
+conda run -n torch <command>
 ```
 
 Examples:
 
 ```bash
-conda run -n trogdor python -c "from chiaroscuro.utils import bh_correct; print('OK')"
-conda run -n trogdor trogdor score --help
+conda run -n torch python -c "from chiaroscuro.utils import bh_correct; print('OK')"
+conda run -n torch trogdor score --help
 ```

@@ -56,6 +56,44 @@ class _ChunkDataset(Dataset):
         return chunk
 
 
+class _ChunkDataset(Dataset):
+    """Lazy Dataset of overlapping signal chunks for a single chromosome.
+
+    Slices chunks from a pre-loaded signal tensor on demand, applying an
+    optional per-chunk transform (e.g. normalization). Used by
+    ``predict_chromosome`` to feed a DataLoader without pre-materializing all
+    chunks at once.
+
+    Parameters
+    ----------
+    signal : torch.Tensor, shape=(2, total_length)
+        Full chromosome signal (plus and minus strands).
+    starts : list of int
+        Start position (in input coordinates) of each chunk.
+    chunk_size : int
+        Number of input positions per chunk.
+    transform : callable or None, optional
+        Function applied to each ``(2, chunk_size)`` chunk before it is
+        returned. Default is None.
+    """
+
+    def __init__(self, signal, starts, chunk_size, transform=None):
+        self.signal = signal
+        self.starts = starts
+        self.chunk_size = chunk_size
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.starts)
+
+    def __getitem__(self, i):
+        s = self.starts[i]
+        chunk = self.signal[:, s : s + self.chunk_size]
+        if self.transform is not None:
+            chunk = self.transform(chunk)
+        return chunk
+
+
 def predict_chromosome(
     model,
     signal,

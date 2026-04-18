@@ -28,6 +28,12 @@ pip install trogdor
 Or install the latest development version directly from GitHub:
 
 ```bash
+pip install trogdor
+```
+
+Or install the latest development version directly from GitHub:
+
+```bash
 pip install git+https://github.com/adamyhe/TROGDOR.git
 # or with uv:
 uv tool install git+https://github.com/adamyhe/TROGDOR.git
