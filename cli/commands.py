@@ -386,25 +386,27 @@ def cmd_fdr(args):
     )
 
     # ---- Find threshold at FDR target ----
-    passing = np.where(fdr <= args.fdr_target)[0]
-    if len(passing) == 0:
-        threshold_at_target = float("nan")
-        n_peaks_at_target = 0
-    else:
-        first_pass = passing[0]
-        threshold_at_target = float(thresholds[first_pass])
-        n_peaks_at_target = int(n_real[first_pass])
+    threshold_at_target = float("nan")
+    n_peaks_at_target = 0
+    first_pass = None
+    if args.fdr_target is not None:
+        passing = np.where(fdr <= args.fdr_target)[0]
+        if len(passing) > 0:
+            first_pass = passing[0]
+            threshold_at_target = float(thresholds[first_pass])
+            n_peaks_at_target = int(n_real[first_pass])
 
     # ---- Print summary ----
     print(f"Real peaks:       {len(real_scores):,}")
     print(f"Null peaks:       {len(null_scores):,} ({args.n_shuffle} shuffle(s))")
     print(f"Score stat:       {args.stat}")
-    print(f"FDR target:       {args.fdr_target:.3f}")
-    if np.isnan(threshold_at_target):
-        print(f"Score threshold:  N/A (FDR {args.fdr_target} never reached)")
-    else:
-        print(f"Score threshold:  {threshold_at_target:.6f}")
-        print(f"Peaks at target:  {n_peaks_at_target:,}")
+    if args.fdr_target is not None:
+        print(f"FDR target:       {args.fdr_target:.3f}")
+        if np.isnan(threshold_at_target):
+            print(f"Score threshold:  N/A (FDR {args.fdr_target} never reached)")
+        else:
+            print(f"Score threshold:  {threshold_at_target:.6f}")
+            print(f"Peaks at target:  {n_peaks_at_target:,}")
 
     # ---- Optional TSV output ----
     if args.output is not None:
@@ -425,6 +427,8 @@ def cmd_fdr(args):
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
+        recall = n_real / len(real_scores)
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         fig.suptitle(args.bigwig, fontsize=9)
@@ -449,7 +453,7 @@ def cmd_fdr(args):
                 color="salmon",
                 label="null",
             )
-        if not np.isnan(threshold_at_target):
+        if args.fdr_target is not None and not np.isnan(threshold_at_target):
             ax.axvline(
                 threshold_at_target,
                 color="black",
@@ -462,17 +466,18 @@ def cmd_fdr(args):
         ax.set_title("Score distributions")
         ax.legend(fontsize=8)
 
-        # Right — FDR curve
+        # Right — FDR curve overlaid with recall
         ax = axes[1]
-        ax.plot(thresholds, fdr, color="black", linewidth=1.5)
-        ax.axhline(
-            args.fdr_target,
-            color="firebrick",
-            linestyle="--",
-            linewidth=0.8,
-            label=f"FDR={args.fdr_target}",
-        )
-        if not np.isnan(threshold_at_target):
+        ax.plot(thresholds, fdr, color="black", linewidth=1.5, label="FDR")
+        if args.fdr_target is not None:
+            ax.axhline(
+                args.fdr_target,
+                color="firebrick",
+                linestyle="--",
+                linewidth=0.8,
+                label=f"FDR={args.fdr_target}",
+            )
+        if args.fdr_target is not None and not np.isnan(threshold_at_target):
             ax.axvline(
                 threshold_at_target,
                 color="grey",
@@ -482,9 +487,42 @@ def cmd_fdr(args):
             )
         ax.set_xlabel(f"Score threshold ({args.stat})")
         ax.set_ylabel("Empirical FDR")
-        ax.set_title("FDR vs threshold")
+        ax.set_title("FDR and recall vs threshold")
         ax.set_ylim(0, 1.05)
-        ax.legend(fontsize=8)
+
+        ax2 = ax.twinx()
+        ax2.plot(thresholds, recall, color="steelblue", linewidth=1.5, linestyle="-", label="Recall")
+        ax2.set_ylabel("Recall (fraction of real peaks)", color="steelblue")
+        ax2.tick_params(axis="y", labelcolor="steelblue")
+        ax2.set_ylim(0, 1.05)
+
+        mark = getattr(args, "mark_score", None)
+        if mark is not None and thresholds[0] <= mark <= thresholds[-1]:
+            idx = int(np.searchsorted(thresholds, mark, side="left"))
+            idx = min(idx, len(thresholds) - 1)
+            fdr_at_mark = float(fdr[idx])
+            recall_at_mark = float(recall[idx])
+            ax.axvline(mark, color="darkorange", linestyle=":", linewidth=1.2)
+            ax.annotate(
+                f"FDR={fdr_at_mark:.3f}",
+                xy=(mark, fdr_at_mark),
+                xytext=(6, 4),
+                textcoords="offset points",
+                fontsize=7,
+                color="black",
+            )
+            ax2.annotate(
+                f"recall={recall_at_mark:.3f}",
+                xy=(mark, recall_at_mark),
+                xytext=(6, -10),
+                textcoords="offset points",
+                fontsize=7,
+                color="steelblue",
+            )
+
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
 
         plt.tight_layout()
         fig.savefig(args.figure, dpi=150)

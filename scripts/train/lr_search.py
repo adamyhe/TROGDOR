@@ -11,7 +11,6 @@ import wandb
 from torcheval.metrics.functional import binary_auprc
 
 from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
-from chiaroscuro.predict import predict
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.trogdor import TROGDOR
 
@@ -111,11 +110,8 @@ for lr in LRS:
     with torch.no_grad():
         y_vals, logits_vals = [], []
         for X_val, y_val in val_loader:
-            logits_vals.append(
-                predict(
-                    model, X_val, batch_size=64, device="cuda", dtype=torch.bfloat16
-                )
-            )
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logits_vals.append(model(X_val.cuda()).cpu())
             y_vals.append(y_val)
         y_val_cat = torch.cat(y_vals)
         logits_val_cat = torch.cat(logits_vals)

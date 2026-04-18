@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trogdor"
-version = "0.1.1"
+version = "0.2.0"
 description = "Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR)"
 authors = [{ name = "Adam He", email = "adamyhe@gmail.com" }]
 license = { file = "LICENSE" }

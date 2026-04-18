@@ -1,12 +1,12 @@
 """
-Tests for predict.py — both the existing predict() and new predict_chromosome().
+Tests for predict_chromosome().
 """
 
 import pytest
 import torch
 import torch.nn as nn
 
-from chiaroscuro.predict import predict, predict_chromosome
+from chiaroscuro.predict import predict_chromosome
 
 # ---------------------------------------------------------------------------
 # Minimal mock models for testing
@@ -32,7 +32,6 @@ class ConstantUNet(nn.Module):
         super().__init__()
         self.value = value
         self.output_stride = output_stride
-        # Dummy parameter so predict() can read dtype
         self._p = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, x):
@@ -50,41 +49,6 @@ class EchoFirstChannel(nn.Module):
 
     def forward(self, x):
         return x[:, :1, :: self.output_stride]  # (B, 1, L//output_stride)
-
-
-# ---------------------------------------------------------------------------
-# predict() (existing utility) — uses output_stride=1 models
-# ---------------------------------------------------------------------------
-
-
-class TestPredict:
-    def test_basic_shape(self):
-        """Output shape must be (N, 1, L) for a stride-1 model."""
-        model = ConstantUNet(value=1.0, output_stride=1)
-        X = torch.randn(10, 2, 128)
-        y = predict(model, X, batch_size=4, device="cpu")
-        assert y.shape == (10, 1, 128)
-
-    def test_constant_value(self):
-        """A constant model must produce the exact fill value at every position."""
-        model = ConstantUNet(value=0.7, output_stride=1)
-        X = torch.randn(6, 2, 64)
-        y = predict(model, X, batch_size=3, device="cpu")
-        assert torch.allclose(y, torch.full_like(y, 0.7))
-
-    def test_single_example(self):
-        """predict() must handle a dataset of size 1 without error."""
-        model = IdentityUNet(output_stride=1)
-        X = torch.randn(1, 2, 256)
-        y = predict(model, X, batch_size=1, device="cpu")
-        assert y.shape == (1, 1, 256)
-
-    def test_batch_size_larger_than_dataset(self):
-        """batch_size larger than the dataset must not raise and must return all examples."""
-        model = IdentityUNet(output_stride=1)
-        X = torch.randn(3, 2, 64)
-        y = predict(model, X, batch_size=100, device="cpu")
-        assert y.shape == (3, 1, 64)
 
 
 # ---------------------------------------------------------------------------

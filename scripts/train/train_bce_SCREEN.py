@@ -25,18 +25,11 @@ parser.add_argument(
 parser.add_argument(
     "--lr", type=float, default=1e-3, help="Learning rate. Default: 1e-3."
 )
-parser.add_argument(
-    "--val_interval",
-    type=int,
-    default=None,
-    help="Validate every N training steps in addition to epoch end. "
-    "Default: epoch end only.",
-)
 args = parser.parse_args()
 
 TRAIN_SAMPLES = ["G1", "G2", "G3", "G5"]
 VAL_SAMPLES = ["G6"]
-TSS_BED = os.path.join(DATA_DIR, "K562.positive.bed.gz")
+TSS_BED = os.path.join(DATA_DIR, "K562_ENCODE_prom_enh.hg19.bed")
 
 train_pl = [os.path.join(DATA_DIR, f"{s}.pl.bw") for s in TRAIN_SAMPLES]
 train_mn = [os.path.join(DATA_DIR, f"{s}.mn.bw") for s in TRAIN_SAMPLES]
@@ -50,7 +43,7 @@ val_tss = [TSS_BED] * len(VAL_SAMPLES)
 MAX_EPOCHS = 20
 WARMUP_STEPS = 500
 BATCH_SIZE = 64  # halved from 64 to keep GPU memory constant with 2× window
-EARLY_STOPPING = None
+EARLY_STOPPING = 5
 WEIGHT_DECAY = 1e-4
 WINDOW_SIZE = 2**18  # 524288 bp (2× the original 2^18)
 
@@ -105,7 +98,7 @@ else:
 # --- Model + optimizer ---
 
 model = TROGDOR(
-    name=f"{MODEL_DIR}/TROGDOR_BCE_{args.pos_weight}_{args.lr}", loss_fn=loss_fn
+    name=f"{MODEL_DIR}/TROGDOR_BCE_SCREEN_{args.pos_weight}_{args.lr}", loss_fn=loss_fn
 ).cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
 
@@ -140,7 +133,6 @@ run = wandb.init(
         "loss_fn": "BCEWithLogitsLoss",
         "pos_weight": args.pos_weight,
         "window_size": WINDOW_SIZE,
-        "val_interval": args.val_interval,
     },
 )
 
@@ -155,6 +147,5 @@ model.fit(
     verbose=True,
     wandb_run=run,
     scheduler=scheduler,
-    val_interval=args.val_interval,
 )
 run.finish()

@@ -292,8 +292,8 @@ def cli():
     parser_fdr.add_argument(
         "--fdr_target",
         type=float,
-        default=0.05,
-        help="FDR target for reporting the score threshold (default: 0.05)",
+        default=None,
+        help="FDR target for reporting the score threshold; omit to skip (default: 0.05)",
     )
     parser_fdr.add_argument(
         "--n_thresholds",
@@ -316,6 +316,12 @@ def cli():
         nargs="+",
         default=None,
         help="Chromosome whitelist (default: all in bigWig)",
+    )
+    parser_fdr.add_argument(
+        "--mark_score",
+        type=float,
+        default=None,
+        help="Annotate the FDR and recall at this score threshold on the figure",
     )
     parser_fdr.add_argument(
         "-v", "--verbose", action="store_true", help="Print per-chromosome progress"
