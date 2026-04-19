@@ -1,15 +1,12 @@
 # TROGDOR
 
-[![PyPI](https://img.shields.io/pypi/v/trogdor)](https://pypi.org/project/trogdor/) [![Weights](https://img.shields.io/badge/%F0%9F%A4%97-Weights-yellow)](https://huggingface.co/adamyhe/TROGDOR)
+[![PyPI](https://img.shields.io/pypi/v/trogdor)](https://pypi.org/project/trogdor/) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/adamyhe/trogdor/actions/workflows/python-package.yml) [![Weights](https://img.shields.io/badge/%F0%9F%A4%97-Weights-yellow)](https://huggingface.co/adamyhe/TROGDOR) [![PyPI Downloads](https://static.pepy.tech/personalized-badge/trogdor?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/trogdor)
 
 Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR).
 
 https://www.youtube.com/watch?v=90X5NJleYJQ
 
-TROGDOR identifies transcription initiation regions (TIRs) from stranded
-nascent RNA sequencing data (GRO-seq, PRO-seq, ChRO-seq, mNET-seq, etc.). It
-uses a 1D U-Net model and a tiled image segmentation approach to achieve SOTA
-performance at predicting TIRs while maintaining computational efficiency.
+TROGDOR identifies transcription initiation regions (TIRs) from stranded nascent RNA sequencing data (GRO-seq, PRO-seq, ChRO-seq, mNET-seq, etc.). It uses a 1D U-Net model and a tiled image segmentation approach to achieve SOTA performance at predicting TIRs while maintaining computational efficiency.
 
 ## Installation
 
@@ -20,12 +17,6 @@ uv tool install trogdor
 ```
 
 Or with pip inside a conda/venv environment:
-
-```bash
-pip install trogdor
-```
-
-Or install the latest development version directly from GitHub:
 
 ```bash
 pip install trogdor

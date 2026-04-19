@@ -125,8 +125,8 @@ def cli():
     parser_pipeline.add_argument(
         "--num_workers",
         type=int,
-        default=0,
-        help="Number of DataLoader worker processes for chunk preprocessing (default: 0). "
+        default=4,
+        help="Number of DataLoader worker processes for chunk preprocessing (default: 4). "
         "Set to 1–4 on Linux/CUDA for additional throughput.",
     )
     parser_pipeline.add_argument(
@@ -222,8 +222,8 @@ def cli():
     parser_score.add_argument(
         "--num_workers",
         type=int,
-        default=0,
-        help="Number of DataLoader worker processes for chunk preprocessing (default: 0). "
+        default=4,
+        help="Number of DataLoader worker processes for chunk preprocessing (default: 4). "
         "Set to 1–4 on Linux/CUDA for additional throughput.",
     )
     parser_score.add_argument(
