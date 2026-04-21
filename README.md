@@ -1,6 +1,6 @@
 # TROGDOR
 
-[![PyPI](https://img.shields.io/pypi/v/trogdor)](https://pypi.org/project/trogdor/) [![Unit Tests](https://github.com/jmschrei/tangermeme/actions/workflows/python-package.yml/badge.svg)](https://github.com/adamyhe/trogdor/actions/workflows/python-package.yml) [![Weights](https://img.shields.io/badge/%F0%9F%A4%97-Weights-yellow)](https://huggingface.co/adamyhe/TROGDOR) [![PyPI Downloads](https://static.pepy.tech/personalized-badge/trogdor?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/trogdor)
+[![PyPI](https://img.shields.io/pypi/v/trogdor)](https://pypi.org/project/trogdor/) [![Tests](https://github.com/adamyhe/TROGDOR/actions/workflows/tests.yml/badge.svg)](https://github.com/adamyhe/TROGDOR/actions/workflows/tests.yml) [![Weights](https://img.shields.io/badge/%F0%9F%A4%97-Weights-yellow)](https://huggingface.co/adamyhe/TROGDOR) [![PyPI Downloads](https://static.pepy.tech/personalized-badge/trogdor?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/trogdor)
 
 Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR).
 
