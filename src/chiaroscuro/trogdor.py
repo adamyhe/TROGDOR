@@ -15,7 +15,15 @@ import torch
 from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
-from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
+from .modules import (
+    DecoderBlock,
+    DilatedResidualStack1D,
+    DoubleConv1D,
+    EncoderBlock,
+    ResidualConv1D,
+    ResidualDecoderBlock,
+    ResidualEncoderBlock,
+)
 
 
 torch.backends.cudnn.benchmark = True
@@ -414,3 +422,175 @@ class TROGDOR(torch.nn.Module):
                 break
 
         torch.save(self.state_dict(), f"{self.name}.final.torch")
+
+
+class TROGDORResidual(TROGDOR):
+    """Residual asymmetric 1D U-Net for experimental TROGDOR retraining.
+
+    This variant keeps the original model's input/output contract and training
+    methods, but swaps in residual convolution blocks, learned stride-2
+    downsampling, and an optional dilated residual bottleneck. By default it
+    also derives simple strand-interaction channels from the normalized plus
+    and minus tracks: sum and difference.
+    """
+
+    def __init__(
+        self,
+        in_channels=2,
+        base_channels=32,
+        output_stride=16,
+        context_depth=4,
+        max_channels=512,
+        kernel_size=3,
+        activation="silu",
+        use_strand_features=True,
+        bottleneck_dilations=(1, 2, 4, 8),
+        name="TROGDORResidual",
+        verbose=True,
+        loss_fn=None,
+        loss_kwargs=None,
+    ):
+        torch.nn.Module.__init__(self)
+        self.name = name
+        self.output_stride = output_stride
+        self.use_strand_features = use_strand_features
+        self.register_buffer("_activation_id", torch.tensor(_activation_id(activation)))
+        self.register_buffer(
+            "_use_strand_features", torch.tensor(int(use_strand_features))
+        )
+        self.register_buffer(
+            "_bottleneck_dilations",
+            torch.tensor(tuple(bottleneck_dilations), dtype=torch.long),
+        )
+
+        n_out = int(math.log2(output_stride))
+        if 2**n_out != output_stride:
+            raise ValueError(f"output_stride must be a power of 2, got {output_stride}")
+        if use_strand_features and in_channels != 2:
+            raise ValueError("use_strand_features=True requires in_channels=2.")
+
+        stem_in_channels = in_channels + 2 if use_strand_features else in_channels
+
+        self.stem = torch.nn.Sequential(
+            torch.nn.Conv1d(stem_in_channels, base_channels, kernel_size=7, padding=3),
+            torch.nn.BatchNorm1d(base_channels),
+            _activation(activation),
+        )
+
+        self.outer_encoders = torch.nn.ModuleList()
+        ch = base_channels
+        for i in range(n_out):
+            out_ch = min(base_channels * (2**i), max_channels)
+            self.outer_encoders.append(
+                ResidualEncoderBlock(ch, out_ch, kernel_size, activation)
+            )
+            ch = out_ch
+
+        self.inner_encoders = torch.nn.ModuleList()
+        for i in range(n_out, n_out + context_depth):
+            out_ch = min(base_channels * (2**i), max_channels)
+            self.inner_encoders.append(
+                ResidualEncoderBlock(ch, out_ch, kernel_size, activation)
+            )
+            ch = out_ch
+
+        bottleneck_ch = min(
+            base_channels * (2 ** (n_out + context_depth)), max_channels
+        )
+        bottleneck = [ResidualConv1D(ch, bottleneck_ch, kernel_size, activation)]
+        if bottleneck_dilations:
+            bottleneck.append(
+                DilatedResidualStack1D(
+                    bottleneck_ch,
+                    kernel_size=kernel_size,
+                    dilations=bottleneck_dilations,
+                    activation=activation,
+                )
+            )
+        self.bottleneck = torch.nn.Sequential(*bottleneck)
+        ch = bottleneck_ch
+
+        inner_out_channels = [
+            min(base_channels * (2 ** (n_out + j)), max_channels)
+            for j in range(context_depth)
+        ]
+        self.decoders = torch.nn.ModuleList()
+        for j in range(context_depth - 1, -1, -1):
+            skip_ch = inner_out_channels[j]
+            out_ch = (
+                skip_ch
+                if j > 0
+                else int(min(base_channels * (2 ** (n_out - 1)), max_channels))
+            )
+            self.decoders.append(
+                ResidualDecoderBlock(ch, skip_ch, out_ch, kernel_size, activation)
+            )
+            ch = out_ch
+
+        self.head = torch.nn.Sequential(
+            ResidualConv1D(ch, ch, kernel_size, activation),
+            torch.nn.Conv1d(ch, 1, kernel_size=1),
+        )
+
+        if loss_fn is None:
+            loss_fn = torch.nn.BCEWithLogitsLoss()
+        _kw = loss_kwargs or {}
+        self._loss_fn = functools.partial(loss_fn, **_kw) if _kw else loss_fn
+
+        self.logger = Logger(
+            [
+                "Epoch",
+                "Iteration",
+                "Train_Time",
+                "Val_Time",
+                "Train_Loss",
+                "Val_Loss",
+                "Val_AUPRC",
+                "Val_Dice",
+                "Saved?",
+            ],
+            verbose=verbose,
+        )
+
+    def forward(self, X):
+        if self.use_strand_features:
+            strand_sum = X[:, :1, :] + X[:, 1:2, :]
+            strand_diff = X[:, :1, :] - X[:, 1:2, :]
+            X = torch.cat([X, strand_sum, strand_diff], dim=1)
+
+        X = self.stem(X)
+
+        for enc in self.outer_encoders:
+            _, X = enc(X)
+
+        inner_skips = []
+        for enc in self.inner_encoders:
+            skip, X = enc(X)
+            inner_skips.append(skip)
+
+        X = self.bottleneck(X)
+
+        for dec, skip in zip(self.decoders, reversed(inner_skips)):
+            X = dec(X, skip)
+
+        return self.head(X)
+
+
+def _activation(name):
+    if name == "relu":
+        return torch.nn.ReLU()
+    if name == "gelu":
+        return torch.nn.GELU()
+    if name == "silu":
+        return torch.nn.SiLU()
+    raise ValueError(f"Unsupported activation: {name}")
+
+
+def _activation_id(name):
+    if name == "relu":
+        return 0
+    if name == "gelu":
+        return 1
+    if name == "silu":
+        return 2
+    raise ValueError(f"Unsupported activation: {name}")

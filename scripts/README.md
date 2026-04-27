@@ -10,6 +10,8 @@ scripts/
   data/       download_training_data.sh      — fetch K562 PRO/GRO-seq bigWigs from GEO
   train/      train.py                       — train TROGDOR on K562 data
               lr_search.py                   — grid search over learning rates (1e-6 to 1e-3)
+              train_residual_bce.py          — train experimental TROGDORResidual
+              run_residual_ablations.sh      — run residual architecture ablations
   benchmark/  benchmark.py                   — genome-wide AUROC/AUPRC from a trained model
               benchmark_bw.py                — genome-wide AUROC/AUPRC from a pre-computed prob bigWig
               benchmark_tile_position.py     — compare auPRC for tile-centre vs tile-edge bins
@@ -86,6 +88,57 @@ python scripts/train/lr_search.py
 Sweeps 7 log-spaced LRs from 1e-6 to 1e-3, training each for 1000 steps with
 a flat LR and evaluating val BCE and AUPRC. Results are logged to wandb under
 the `lr_search` group.
+
+### Residual architecture experiments
+
+`TROGDORResidual` keeps the same input/output contract as the original model,
+but swaps the plain U-Net blocks for residual blocks, learned stride-2
+downsampling, optional derived strand channels, and an optional dilated
+bottleneck.
+
+Train the default residual candidate:
+
+```bash
+conda run -n torch python scripts/train/train_residual_bce.py \
+  --pos_weight 500 \
+  --lr 1e-3 \
+  --activation silu \
+  --bottleneck_dilations 1,2,4,8
+```
+
+Recommended first ablations:
+
+```bash
+conda run -n torch bash scripts/train/run_residual_ablations.sh
+```
+
+This runs:
+
+| Variant | Purpose |
+| ------- | ------- |
+| residual only, no strand features, no dilations | Measures the value of residual blocks + learned downsampling alone |
+| residual + strand features, no dilations | Tests plus+minus and plus-minus derived channels |
+| residual + strand features + dilated bottleneck | Full default candidate |
+| full candidate with `gelu` | Checks whether a smoother transformer-style activation helps |
+| full candidate with `relu` | Checks whether the original activation remains best |
+
+Use the same G6 genome-wide benchmark and FDR calibration as the original model
+before promoting a residual checkpoint. AUPRC is the first-pass ranking metric;
+FDR curves and false positives in broad transcribed regions are the practical
+tie-breakers.
+
+Activation choice:
+
+| Activation | Why use it | Main tradeoff |
+| ---------- | ---------- | ------------- |
+| `silu` | Smooth, non-monotonic-ish gating; often works well in modern conv nets and keeps small negative responses instead of hard-clipping them | Slightly more compute than ReLU |
+| `gelu` | Smooth probabilistic gating; can behave similarly to SiLU and is worth one ablation | Slightly more compute; not clearly better for conv signal models |
+| `relu` | Fast, simple, and closest to the original TROGDOR baseline | Hard zero for all negatives can discard weak evidence and creates less smooth optimization |
+
+`silu` is the default for `TROGDORResidual` because it is a conservative modern
+upgrade for residual convolutional networks: smoother than ReLU, inexpensive,
+and less likely than GELU to be a purely stylistic transplant from transformer
+defaults.
 
 ### Weights & Biases
 

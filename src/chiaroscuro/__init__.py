@@ -2,7 +2,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .data_transforms import normalization
 from .predict import predict_chromosome, predict_genome
-from .trogdor import TROGDOR
+from .trogdor import TROGDOR, TROGDORResidual
 
 try:
     __version__ = version("trogdor")

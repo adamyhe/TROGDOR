@@ -10,8 +10,15 @@ from torch.nn import BCEWithLogitsLoss
 
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.losses import focal_loss, focal_tversky_loss, tversky_loss
-from chiaroscuro.modules import DecoderBlock, DoubleConv1D, EncoderBlock
-from chiaroscuro.trogdor import TROGDOR
+from chiaroscuro.modules import (
+    DecoderBlock,
+    DoubleConv1D,
+    EncoderBlock,
+    ResidualConv1D,
+    ResidualEncoderBlock,
+)
+from chiaroscuro.trogdor import TROGDOR, TROGDORResidual
+from chiaroscuro.utils import load_model
 
 # ---------------------------------------------------------------------------
 # normalization
@@ -121,6 +128,28 @@ class TestEncoderBlock:
         skip, pooled = m(x)
         assert skip.shape == (1, 8, 65)
         assert pooled.shape == (1, 8, 32)  # floor(65/2)
+
+
+# ---------------------------------------------------------------------------
+# Residual blocks
+# ---------------------------------------------------------------------------
+
+
+class TestResidualBlocks:
+    def test_residual_conv_shape(self):
+        """ResidualConv1D preserves length and can project channels."""
+        m = ResidualConv1D(8, 16, kernel_size=3)
+        x = torch.randn(2, 8, 64)
+        y = m(x)
+        assert y.shape == (2, 16, 64)
+
+    def test_residual_encoder_shapes(self):
+        """ResidualEncoderBlock returns a skip and a learned 2x downsample."""
+        m = ResidualEncoderBlock(8, 16, kernel_size=3)
+        x = torch.randn(2, 8, 64)
+        skip, pooled = m(x)
+        assert skip.shape == (2, 16, 64)
+        assert pooled.shape == (2, 16, 32)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +289,89 @@ class TestTROGDOR:
         for enc in m.inner_encoders:
             out_ch = enc.conv.block[0].out_channels
             assert out_ch <= 128, f"Channel count {out_ch} exceeds max_channels=128"
+
+
+class TestTROGDORResidual:
+    @pytest.fixture
+    def model(self):
+        return TROGDORResidual(
+            in_channels=2,
+            base_channels=8,
+            output_stride=4,
+            context_depth=2,
+            kernel_size=3,
+            bottleneck_dilations=(1, 2),
+        )
+
+    def test_output_shape_small(self, model):
+        """Residual variant keeps the TROGDOR input/output contract."""
+        x = torch.randn(3, 2, 256)
+        y = model(x)
+        assert y.shape == (3, 1, 64)
+
+    def test_without_strand_features(self):
+        """The residual model can run without derived strand channels."""
+        m = TROGDORResidual(
+            base_channels=8,
+            output_stride=4,
+            context_depth=2,
+            use_strand_features=False,
+            bottleneck_dilations=(),
+        )
+        x = torch.randn(2, 2, 256)
+        y = m(x)
+        assert y.shape == (2, 1, 64)
+
+    def test_strand_features_require_two_channels(self):
+        """Derived plus/minus features require the standard two input strands."""
+        with pytest.raises(ValueError):
+            TROGDORResidual(in_channels=3, use_strand_features=True)
+
+    def test_gradient_flows(self, model):
+        """Loss.backward() must populate gradients in the residual variant."""
+        x = torch.randn(2, 2, 256)
+        loss = model(x).mean()
+        loss.backward()
+        grads = [p.grad for p in model.parameters() if p.grad is not None]
+        assert len(grads) > 0
+
+
+class TestLoadModel:
+    def test_load_model_original_trogdor(self, tmp_path):
+        """load_model keeps loading original TROGDOR checkpoints."""
+        path = tmp_path / "trogdor.torch"
+        model = TROGDOR(base_channels=8, output_stride=4, context_depth=2)
+        torch.save(model.state_dict(), path)
+
+        loaded = load_model(path, "cpu")
+        x = torch.randn(1, 2, 256)
+        y = loaded(x)
+
+        assert isinstance(loaded, TROGDOR)
+        assert not isinstance(loaded, TROGDORResidual)
+        assert y.shape == (1, 1, 64)
+
+    def test_load_model_residual_trogdor(self, tmp_path):
+        """load_model autodetects TROGDORResidual checkpoints."""
+        path = tmp_path / "residual.torch"
+        model = TROGDORResidual(
+            base_channels=8,
+            output_stride=4,
+            context_depth=2,
+            activation="gelu",
+            use_strand_features=False,
+            bottleneck_dilations=(),
+        )
+        torch.save(model.state_dict(), path)
+
+        loaded = load_model(path, "cpu")
+        x = torch.randn(1, 2, 256)
+        y = loaded(x)
+
+        assert isinstance(loaded, TROGDORResidual)
+        assert isinstance(loaded.stem[2], torch.nn.GELU)
+        assert loaded.use_strand_features is False
+        assert y.shape == (1, 1, 64)
 
 
 # ---------------------------------------------------------------------------
