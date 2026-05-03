@@ -79,6 +79,21 @@ trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.95.bed.gz -s 0.95
 trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.99.bed.gz -s 0.99
 ```
 
+The default `peaks` command preserves the original threshold-and-merge caller.
+An experimental refined caller is available for benchmarking post-processing
+choices without changing the model or default behavior:
+
+```bash
+trogdor peaks -i mysample.prob.bw -o mysample.refined.bed \
+  --mode refined --min_score 0.95 --max_gap 32 --min_width 32
+```
+
+Refined output includes BED columns for the merged peak and the max-score
+summit bin: `chrom`, `start`, `end`, `score`, `summit_start`, `summit_end`,
+`summit_score`. `--min_support_signal` can optionally require raw plus/minus
+coverage support when `--support_plus_bigwig` and `--support_minus_bigwig` are
+provided.
+
 ### Empirical FDR estimation and `min_score` calibration
 
 The `fdr` subcommand estimates the score threshold corresponding to a target empirical FDR from a probability bigWig and a ground truth peak set (e.g. ENCODE PLS/ELS or PRO-cap peaks for your cell type of interest). This can be useful for deciding what `min_score` threshold you should use (although the default `0.95` has worked well for me).

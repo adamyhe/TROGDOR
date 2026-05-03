@@ -2,8 +2,12 @@
 # threshold_sweep.py
 # Author: Adam He <adamyhe@gmail.com>
 
-"""Sweep a probability threshold and compute peak-level recall and FDR
-against a ground truth BED at each level.
+"""Diagnostic threshold sweep for peak-level recall and empirical precision.
+
+The main ``trogdor fdr`` command is the preferred workflow for score-threshold
+calibration. This script is retained as a diagnostic/legacy helper for
+visualizing caller behavior against a named reference BED; in practice it has
+been less informative than the shuffle-based empirical FDR command.
 
 `benchmark_bw.py` operates at the bin level (AUROC/AUPRC).  This script
 operates at the *peak level*: for each threshold it calls peaks from a
@@ -51,6 +55,8 @@ import sys
 import numpy as np
 import pandas as pd
 import pybigtools
+
+from chiaroscuro.peaks import call_peaks
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +129,40 @@ def parse_args():
         type=int,
         default=200,
         help="Half-width in bp of the centre-window hit test (default: 200)",
+    )
+    p.add_argument(
+        "--caller_mode",
+        choices=["simple", "refined"],
+        default="simple",
+        help="Peak caller used during the sweep (default: simple).",
+    )
+    p.add_argument(
+        "--max_gap",
+        type=int,
+        default=0,
+        help="Refined caller only: merge passing blocks separated by at most this many bp.",
+    )
+    p.add_argument(
+        "--min_width",
+        type=int,
+        default=0,
+        help="Refined caller only: discard called peaks narrower than this many bp.",
+    )
+    p.add_argument(
+        "--min_support_signal",
+        type=float,
+        default=0.0,
+        help="Refined caller only: require this minimum raw plus/minus signal within each peak.",
+    )
+    p.add_argument(
+        "--support_plus_bigwig",
+        default=None,
+        help="Plus-strand raw signal bigWig used with --min_support_signal.",
+    )
+    p.add_argument(
+        "--support_minus_bigwig",
+        default=None,
+        help="Minus-strand raw signal bigWig used with --min_support_signal.",
     )
     p.add_argument(
         "--chroms",
@@ -279,6 +319,30 @@ def _merge_peaks_np(starts, ends, scores, threshold, expand=0):
     )
 
 
+def _call_peaks_np(starts, ends, scores, threshold, args, expand=0):
+    if args.caller_mode == "simple":
+        return _merge_peaks_np(starts, ends, scores, threshold, expand)
+
+    intervals = zip(starts - expand, ends + expand, scores)
+    peaks = call_peaks(
+        intervals,
+        min_score=threshold,
+        max_gap=args.max_gap,
+        min_width=args.min_width,
+    )
+    if not peaks:
+        return (
+            np.empty(0, np.int64),
+            np.empty(0, np.int64),
+            np.empty(0, np.float32),
+        )
+    return (
+        np.array([p["start"] for p in peaks], dtype=np.int64),
+        np.array([p["end"] for p in peaks], dtype=np.int64),
+        np.array([p["score"] for p in peaks], dtype=np.float32),
+    )
+
+
 def _centre_window_hits_np(peak_starts, peak_ends, gt_starts, gt_ends, window):
     """Vectorised centre-window hit test.
 
@@ -319,6 +383,20 @@ def _centre_window_hits_np(peak_starts, peak_ends, gt_starts, gt_ends, window):
     return pred_hits, gt_recalled
 
 
+def _support_mask(chrom, peak_starts, peak_ends, support_handles, min_support_signal):
+    if support_handles is None or len(peak_starts) == 0:
+        return np.ones(len(peak_starts), dtype=bool)
+    pl_bw, mn_bw = support_handles
+    keep = np.zeros(len(peak_starts), dtype=bool)
+    for i, (start, end) in enumerate(zip(peak_starts, peak_ends)):
+        pl = np.nan_to_num(np.array(pl_bw.values(chrom, int(start), int(end)), dtype=np.float32))
+        mn = np.abs(
+            np.nan_to_num(np.array(mn_bw.values(chrom, int(start), int(end)), dtype=np.float32))
+        )
+        keep[i] = max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
+    return keep
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -326,6 +404,20 @@ def _centre_window_hits_np(peak_starts, peak_ends, gt_starts, gt_ends, window):
 
 def main():
     args = parse_args()
+    if args.min_support_signal > 0 and (
+        args.support_plus_bigwig is None or args.support_minus_bigwig is None
+    ):
+        print(
+            "--min_support_signal requires --support_plus_bigwig and --support_minus_bigwig.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.min_support_signal > 0 and args.caller_mode != "refined":
+        print("--min_support_signal is only supported with --caller_mode refined.", file=sys.stderr)
+        sys.exit(1)
+    if args.max_gap < 0 or args.min_width < 0:
+        print("--max_gap and --min_width must be >= 0.", file=sys.stderr)
+        sys.exit(1)
 
     # ---- Validate mutually exclusive inputs --------------------------------
     if (args.bigwig is None) == (args.dreg is None):
@@ -388,6 +480,13 @@ def main():
             "No scored intervals found for the requested chromosomes.", file=sys.stderr
         )
         sys.exit(1)
+
+    support_handles = None
+    if args.min_support_signal > 0:
+        support_handles = (
+            pybigtools.open(args.support_plus_bigwig),
+            pybigtools.open(args.support_minus_bigwig),
+        )
 
     # ---- Pre-process: convert interval lists to sorted numpy arrays --------
     # Done once here so the threshold sweep only does fast numpy operations.
@@ -461,7 +560,12 @@ def main():
 
         for chrom, (starts, ends, scores) in processed.items():
             gt_s, gt_e = gt_arrays[chrom]
-            peak_s, peak_e, _ = _merge_peaks_np(starts, ends, scores, thr, expand)
+            peak_s, peak_e, _ = _call_peaks_np(starts, ends, scores, thr, args, expand)
+            keep = _support_mask(
+                chrom, peak_s, peak_e, support_handles, args.min_support_signal
+            )
+            peak_s = peak_s[keep]
+            peak_e = peak_e[keep]
 
             if len(peak_s) == 0:
                 gt_recalled_flags.append(np.zeros(len(gt_s), bool))
@@ -493,6 +597,10 @@ def main():
                 "recall": recall,
                 "precision": precision,
                 "peak_fdr": fdr,
+                "caller_mode": args.caller_mode,
+                "max_gap": args.max_gap,
+                "min_width": args.min_width,
+                "min_support_signal": args.min_support_signal,
             }
         )
 
@@ -527,7 +635,8 @@ def main():
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         fig.suptitle(
             f"Peak-level threshold sweep  |  window=±{args.window} bp  |  "
-            f"{n_gt_total:,} GT peaks  |  {len(chroms)} chroms",
+            f"{n_gt_total:,} GT peaks  |  {len(chroms)} chroms  |  "
+            f"caller={args.caller_mode}",
             fontsize=9,
         )
 
@@ -590,6 +699,10 @@ def main():
         fig.savefig(args.figure, dpi=150)
         if args.verbose:
             print(f"Figure saved to {args.figure}")
+
+    if support_handles is not None:
+        support_handles[0].close()
+        support_handles[1].close()
 
 
 if __name__ == "__main__":

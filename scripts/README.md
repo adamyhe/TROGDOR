@@ -13,6 +13,8 @@ scripts/
   benchmark/  benchmark.py                   — genome-wide AUROC/AUPRC from a trained model
               benchmark_bw.py                — genome-wide AUROC/AUPRC from a pre-computed prob bigWig
               benchmark_tile_position.py     — compare auPRC for tile-centre vs tile-edge bins
+              threshold_sweep.py             — diagnostic/legacy threshold sweep
+              truth_panel.py                 — multi-reference label ambiguity report
 ```
 
 ## 1. Download training data
@@ -179,6 +181,64 @@ python scripts/benchmark/benchmark_tile_position.py \
 Output prints the number of comparable bins, the centre auPRC, and the edge
 auPRC. A small gap between the two indicates that boundary artefacts are
 negligible at the chosen `--overlap`.
+
+### Refined caller diagnostics
+
+The default peak caller is unchanged: bins above `--min_score` are merged only
+when they directly abut. The main CLI `trogdor fdr` command is the preferred
+way to calibrate score thresholds. `threshold_sweep.py` is retained as a
+diagnostic/legacy helper for visualizing caller behavior against a named
+reference BED, but in practice it has been less informative than the empirical
+FDR command.
+
+```bash
+python scripts/benchmark/threshold_sweep.py \
+  -b predictions.prob.bw \
+  -t data/K562.positive.bed.gz \
+  --caller_mode refined \
+  --max_gap 32 \
+  --min_width 32 \
+  --score_floor 0.7 \
+  --output refined_sweep.tsv \
+  --figure refined_sweep.png
+```
+
+The sweep reports empirical precision/FDR relative to the named reference BED.
+It does not claim analytic FDR and should not be used as the primary threshold
+calibration workflow.
+
+### Truth panel reports
+
+`truth_panel.py` evaluates the same scored bigWig and call BED against multiple
+orthogonal reference sets and stratifies unmatched calls. The manifest is a TSV
+with required columns:
+
+```text
+cell_type  prob_bw  calls_bed  reference_name  reference_bed
+```
+
+Optional columns add ambiguity categories:
+
+```text
+tss_bed  promoter_bed  enhancer_bed  bidirectional_bed  gene_body_bed  blacklist_bed  reproducible_bed
+```
+
+Run:
+
+```bash
+python scripts/benchmark/truth_panel.py \
+  --manifest truth_panel.tsv \
+  --chrom_sizes hg38.chrom.sizes \
+  --output_prefix panel_report \
+  --chroms chr1 chr2
+```
+
+Outputs:
+
+| File | Description |
+| ---- | ----------- |
+| `panel_report.reference_metrics.tsv` | Per-cell-type/per-reference bin, peak, and center-window metrics |
+| `panel_report.unmatched_categories.tsv` | Unmatched-call categories such as near-TSS, enhancer, gene-body, broad, reproducible, blacklist, and unsupported |
 
 ### Mixed precision
 
