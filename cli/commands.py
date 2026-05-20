@@ -18,6 +18,7 @@ import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
+from chiaroscuro.peaks import call_peaks
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.stats import compute_fdr, score_peaks, shuffle_peaks
 from chiaroscuro.utils import load_model, merge_intervals
@@ -196,6 +197,40 @@ def cmd_peaks(args):
     in_bw.close()
 
     threshold = args.min_score
+    mode = getattr(args, "mode", "simple")
+    max_gap = getattr(args, "max_gap", 0)
+    min_width = getattr(args, "min_width", 0)
+    min_support_signal = getattr(args, "min_support_signal", 0.0)
+    support_plus = getattr(args, "support_plus_bigwig", None)
+    support_minus = getattr(args, "support_minus_bigwig", None)
+
+    if mode not in {"simple", "refined"}:
+        raise ValueError(f"Unknown peak-calling mode: {mode}")
+    if max_gap < 0:
+        raise ValueError("--max_gap must be >= 0.")
+    if min_width < 0:
+        raise ValueError("--min_width must be >= 0.")
+    if min_support_signal > 0 and mode != "refined":
+        raise ValueError("--min_support_signal is only supported with --mode refined.")
+    if min_support_signal > 0 and (support_plus is None or support_minus is None):
+        raise ValueError(
+            "--min_support_signal requires both --support_plus_bigwig and "
+            "--support_minus_bigwig."
+        )
+
+    support_handles = None
+    if min_support_signal > 0:
+        support_handles = (pybigtools.open(support_plus), pybigtools.open(support_minus))
+
+    def _has_support(chrom, start, end):
+        if support_handles is None:
+            return True
+        pl_bw, mn_bw = support_handles
+        pl = np.nan_to_num(np.array(pl_bw.values(chrom, start, end), dtype=np.float32))
+        mn = np.abs(
+            np.nan_to_num(np.array(mn_bw.values(chrom, start, end), dtype=np.float32))
+        )
+        return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
 
     if args.verbose:
         n_pass = sum(
@@ -212,12 +247,28 @@ def cmd_peaks(args):
     def _write_peaks(out_bed):
         n = 0
         for chrom in sorted(chrom_sizes):
-            passing = [
-                (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
-            ]
-            for start, end, max_v in merge_intervals(passing):
-                out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
-                n += 1
+            if mode == "simple":
+                passing = [
+                    (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
+                ]
+                for start, end, max_v in merge_intervals(passing):
+                    out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
+                    n += 1
+            elif mode == "refined":
+                for peak in call_peaks(
+                    chrom_intervals[chrom],
+                    min_score=threshold,
+                    max_gap=max_gap,
+                    min_width=min_width,
+                ):
+                    if not _has_support(chrom, peak["start"], peak["end"]):
+                        continue
+                    out_bed.write(
+                        f"{chrom}\t{peak['start']}\t{peak['end']}\t"
+                        f"{peak['score']:.6g}\t{peak['summit_start']}\t"
+                        f"{peak['summit_end']}\t{peak['summit_score']:.6g}\n"
+                    )
+                    n += 1
         return n
 
     out_path = args.output
@@ -239,6 +290,10 @@ def cmd_peaks(args):
 
     if args.verbose:
         print(f"{n_peaks} peaks written to {out_path}")
+
+    if support_handles is not None:
+        support_handles[0].close()
+        support_handles[1].close()
 
 
 def cmd_pipeline(args):
@@ -286,6 +341,12 @@ def cmd_pipeline(args):
                 input=f"{bw_prefix}.prob.bw",
                 output=args.output,
                 min_score=args.min_score,
+                mode=getattr(args, "mode", "simple"),
+                max_gap=getattr(args, "max_gap", 0),
+                min_width=getattr(args, "min_width", 0),
+                min_support_signal=getattr(args, "min_support_signal", 0.0),
+                support_plus_bigwig=args.pl_bigwig,
+                support_minus_bigwig=args.mn_bigwig,
                 verbose=args.verbose,
             )
         )

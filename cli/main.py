@@ -123,6 +123,31 @@ def cli():
         help="If provided, save the intermediate probability bigWig to this path instead of a temp file.",
     )
     parser_pipeline.add_argument(
+        "--peak_mode",
+        choices=["simple", "refined"],
+        default="simple",
+        dest="mode",
+        help="Peak caller to use after scoring (default: simple).",
+    )
+    parser_pipeline.add_argument(
+        "--max_gap",
+        type=int,
+        default=0,
+        help="Refined peak caller only: merge passing blocks separated by at most this many bp.",
+    )
+    parser_pipeline.add_argument(
+        "--min_width",
+        type=int,
+        default=0,
+        help="Refined peak caller only: discard called peaks narrower than this many bp.",
+    )
+    parser_pipeline.add_argument(
+        "--min_support_signal",
+        type=float,
+        default=0.0,
+        help="Refined peak caller only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
+    )
+    parser_pipeline.add_argument(
         "--num_workers",
         type=int,
         default=4,
@@ -251,6 +276,40 @@ def cli():
         type=float,
         default=0.95,
         help="Minimum probability to report a bin as a peak (default: 0.95)",
+    )
+    parser_peaks.add_argument(
+        "--mode",
+        choices=["simple", "refined"],
+        default="simple",
+        help="Peak-calling mode. 'simple' preserves historical threshold-and-merge behaviour; 'refined' adds max_gap/min_width and summit columns.",
+    )
+    parser_peaks.add_argument(
+        "--max_gap",
+        type=int,
+        default=0,
+        help="Refined mode only: merge passing blocks separated by at most this many bp.",
+    )
+    parser_peaks.add_argument(
+        "--min_width",
+        type=int,
+        default=0,
+        help="Refined mode only: discard called peaks narrower than this many bp.",
+    )
+    parser_peaks.add_argument(
+        "--min_support_signal",
+        type=float,
+        default=0.0,
+        help="Refined mode only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
+    )
+    parser_peaks.add_argument(
+        "--support_plus_bigwig",
+        default=None,
+        help="Plus-strand raw signal bigWig used with --min_support_signal.",
+    )
+    parser_peaks.add_argument(
+        "--support_minus_bigwig",
+        default=None,
+        help="Minus-strand raw signal bigWig used with --min_support_signal.",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
