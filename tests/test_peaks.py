@@ -1,8 +1,21 @@
 """Tests for TROGDOR peak-calling helpers."""
 
+import sys
+import types
+
 import pytest
 
-from chiaroscuro.peaks import call_peaks
+sys.modules.setdefault("pybigtools", types.ModuleType("pybigtools"))
+torcheval = types.ModuleType("torcheval")
+torcheval_metrics = types.ModuleType("torcheval.metrics")
+torcheval_functional = types.ModuleType("torcheval.metrics.functional")
+torcheval_functional.binary_auprc = lambda *args, **kwargs: None
+torcheval_functional.binary_auroc = lambda *args, **kwargs: None
+sys.modules.setdefault("torcheval", torcheval)
+sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
+sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
+
+from chiaroscuro.peaks import call_peaks, call_profile_peaks
 
 
 def test_adjacent_bins_merge():
@@ -55,3 +68,111 @@ def test_invalid_refined_parameters_raise():
         call_peaks([], max_gap=-1)
     with pytest.raises(ValueError, match="min_width"):
         call_peaks([], min_width=-1)
+
+
+def test_profile_single_summit_keeps_seeded_shoulders():
+    intervals = [
+        (0, 10, 0.4),
+        (10, 20, 0.7),
+        (20, 30, 0.96),
+        (30, 40, 0.7),
+        (40, 50, 0.4),
+    ]
+
+    peaks = call_profile_peaks(intervals, min_score=0.95, seed_score=0.5)
+
+    assert len(peaks) == 1
+    assert peaks[0]["start"] == 10
+    assert peaks[0]["end"] == 40
+    assert peaks[0]["summit_start"] == 20
+    assert peaks[0]["summit_score"] == pytest.approx(0.96)
+
+
+def test_profile_splits_two_summits_with_deep_valley():
+    intervals = [
+        (0, 10, 0.95),
+        (10, 20, 0.55),
+        (20, 30, 0.2),
+        (30, 40, 0.6),
+        (40, 50, 0.97),
+    ]
+
+    peaks = call_profile_peaks(
+        intervals,
+        min_score=0.9,
+        seed_score=0.1,
+        valley_fraction=0.5,
+    )
+
+    assert len(peaks) == 2
+    assert (peaks[0]["start"], peaks[0]["end"]) == (0, 20)
+    assert (peaks[1]["start"], peaks[1]["end"]) == (30, 50)
+
+
+def test_profile_keeps_shallow_valley_merged():
+    intervals = [
+        (0, 10, 0.95),
+        (10, 20, 0.8),
+        (20, 30, 0.97),
+    ]
+
+    peaks = call_profile_peaks(
+        intervals,
+        min_score=0.9,
+        seed_score=0.5,
+        valley_fraction=0.5,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["start"] == 0
+    assert peaks[0]["end"] == 30
+
+
+def test_profile_boundary_fraction_trims_low_shoulders():
+    intervals = [
+        (0, 10, 0.5),
+        (10, 20, 0.8),
+        (20, 30, 1.0),
+        (30, 40, 0.7),
+        (40, 50, 0.4),
+    ]
+
+    peaks = call_profile_peaks(
+        intervals,
+        min_score=0.95,
+        seed_score=0.4,
+        boundary_fraction=0.75,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["start"] == 10
+    assert peaks[0]["end"] == 30
+
+
+def test_profile_width_filters():
+    intervals = [
+        (0, 10, 0.95),
+        (10, 20, 0.96),
+        (40, 50, 0.97),
+    ]
+
+    min_filtered = call_profile_peaks(intervals, min_score=0.9, min_width=15)
+    max_filtered = call_profile_peaks(
+        intervals, min_score=0.9, seed_score=0.9, max_width=15
+    )
+
+    assert len(min_filtered) == 1
+    assert (min_filtered[0]["start"], min_filtered[0]["end"]) == (0, 20)
+    assert len(max_filtered) == 1
+    assert (max_filtered[0]["start"], max_filtered[0]["end"]) == (40, 50)
+
+
+def test_invalid_profile_parameters_raise():
+    with pytest.raises(ValueError, match="seed_score"):
+        call_profile_peaks([], min_score=0.5, seed_score=0.6)
+    with pytest.raises(ValueError, match="valley_fraction"):
+        call_profile_peaks([], valley_fraction=1.1)
+    with pytest.raises(ValueError, match="boundary_fraction"):
+        call_profile_peaks([], boundary_fraction=-0.1)
+    with pytest.raises(ValueError, match="smooth_bins"):
+        call_profile_peaks([], smooth_bins=0)

@@ -3,11 +3,9 @@
 
 import argparse
 import io
-import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import warnings
 
 import numpy as np
@@ -18,13 +16,274 @@ import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
-from chiaroscuro.peaks import call_peaks
+from chiaroscuro.peaks import call_peaks, call_profile_peaks
 from chiaroscuro.predict import predict_genome
-from chiaroscuro.stats import compute_fdr, score_peaks, shuffle_peaks
+from chiaroscuro.stats import (
+    compute_fdr,
+    score_peaks,
+    score_peaks_from_array,
+    select_fdr_threshold,
+    shuffle_peaks,
+    shuffle_peaks_within_intervals,
+)
 from chiaroscuro.utils import load_model, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
+
+
+def _load_trogdor_model(model_path, device, verbose=False):
+    if model_path is None:
+        cached = try_to_load_from_cache(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+        if cached is not None:
+            if verbose:
+                print(f"Loading pretrained weights from cache: {cached}")
+            model_path = cached
+        else:
+            if verbose:
+                print(
+                    f"No model specified — downloading pretrained weights from {HF_REPO_ID}..."
+                )
+            model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
+
+    if device == "cuda" and not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            warnings.warn("CUDA not available, falling back to MPS.")
+            device = "mps"
+        else:
+            warnings.warn("CUDA not available, falling back to CPU.")
+            device = "cpu"
+    elif device == "mps" and not torch.backends.mps.is_available():
+        warnings.warn("MPS not available, falling back to CPU.")
+        device = "cpu"
+
+    return load_model(model_path, device), device
+
+
+def _shared_chrom_sizes(pl_bigwig, mn_bigwig):
+    pl_bw = pybigtools.open(pl_bigwig)
+    pl_chrom_sizes = dict(pl_bw.chroms())
+    pl_bw.close()
+
+    mn_bw = pybigtools.open(mn_bigwig)
+    mn_chroms = set(mn_bw.chroms().keys())
+    mn_bw.close()
+
+    return {c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms}
+
+
+def _peak_params(args):
+    threshold = args.min_score
+    mode = getattr(args, "mode", "simple")
+    params = {
+        "threshold": threshold,
+        "mode": mode,
+        "max_gap": getattr(args, "max_gap", 0),
+        "min_width": getattr(args, "min_width", 0),
+        "max_width": getattr(args, "max_width", None),
+        "seed_score": getattr(args, "seed_score", None),
+        "smooth_bins": getattr(args, "smooth_bins", 1),
+        "valley_fraction": getattr(args, "valley_fraction", 0.5),
+        "boundary_fraction": getattr(args, "boundary_fraction", 0.0),
+        "min_support_signal": getattr(args, "min_support_signal", 0.0),
+        "support_plus": getattr(args, "support_plus_bigwig", None),
+        "support_minus": getattr(args, "support_minus_bigwig", None),
+    }
+
+    if mode not in {"simple", "refined", "profile"}:
+        raise ValueError(f"Unknown peak-calling mode: {mode}")
+    if params["max_gap"] < 0:
+        raise ValueError("--max_gap must be >= 0.")
+    if params["min_width"] < 0:
+        raise ValueError("--min_width must be >= 0.")
+    if params["max_width"] is not None and params["max_width"] < 0:
+        raise ValueError("--max_width must be >= 0.")
+    if params["smooth_bins"] < 1:
+        raise ValueError("--smooth_bins must be >= 1.")
+    if not 0 <= params["valley_fraction"] <= 1:
+        raise ValueError("--valley_fraction must be in [0, 1].")
+    if not 0 <= params["boundary_fraction"] <= 1:
+        raise ValueError("--boundary_fraction must be in [0, 1].")
+    if params["seed_score"] is not None and params["seed_score"] > threshold:
+        raise ValueError("--seed_score must be <= --min_score.")
+    if params["min_support_signal"] > 0 and mode not in {"refined", "profile"}:
+        raise ValueError(
+            "--min_support_signal is only supported with --mode refined/profile."
+        )
+    if params["min_support_signal"] > 0 and (
+        params["support_plus"] is None or params["support_minus"] is None
+    ):
+        raise ValueError(
+            "--min_support_signal requires both --support_plus_bigwig and "
+            "--support_minus_bigwig."
+        )
+
+    return params
+
+
+def _candidate_threshold(params):
+    if params["mode"] == "profile" and params["seed_score"] is not None:
+        return min(params["threshold"], params["seed_score"])
+    return params["threshold"]
+
+
+def _open_support_handles(params):
+    if params["min_support_signal"] <= 0:
+        return None
+    return (
+        pybigtools.open(params["support_plus"]),
+        pybigtools.open(params["support_minus"]),
+    )
+
+
+def _has_support(support_handles, params, chrom, start, end):
+    if support_handles is None:
+        return True
+    pl_bw, mn_bw = support_handles
+    pl = np.nan_to_num(np.array(pl_bw.values(chrom, start, end), dtype=np.float32))
+    mn = np.abs(
+        np.nan_to_num(np.array(mn_bw.values(chrom, start, end), dtype=np.float32))
+    )
+    return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= params["min_support_signal"]
+
+
+def _call_chrom_peaks(chrom, intervals, params, support_handles=None):
+    peaks = []
+    threshold = params["threshold"]
+    mode = params["mode"]
+
+    if mode == "simple":
+        passing = [(s, e, v) for s, e, v in intervals if v >= threshold]
+        for start, end, max_v in merge_intervals(passing):
+            peaks.append(
+                {
+                    "chrom": chrom,
+                    "start": int(start),
+                    "end": int(end),
+                    "score": float(max_v),
+                }
+            )
+    elif mode == "refined":
+        for peak in call_peaks(
+            intervals,
+            min_score=threshold,
+            max_gap=params["max_gap"],
+            min_width=params["min_width"],
+        ):
+            if not _has_support(
+                support_handles, params, chrom, peak["start"], peak["end"]
+            ):
+                continue
+            peaks.append({"chrom": chrom, **peak})
+    elif mode == "profile":
+        for peak in call_profile_peaks(
+            intervals,
+            min_score=threshold,
+            seed_score=params["seed_score"],
+            max_gap=params["max_gap"],
+            min_width=params["min_width"],
+            max_width=params["max_width"],
+            smooth_bins=params["smooth_bins"],
+            valley_fraction=params["valley_fraction"],
+            boundary_fraction=params["boundary_fraction"],
+        ):
+            if not _has_support(
+                support_handles, params, chrom, peak["start"], peak["end"]
+            ):
+                continue
+            peaks.append({"chrom": chrom, **peak})
+
+    return peaks
+
+
+def _write_peak_record(out_bed, peak, params):
+    if params["mode"] == "simple":
+        out_bed.write(
+            f"{peak['chrom']}\t{peak['start']}\t{peak['end']}\t"
+            f"{peak['score']:.6g}\n"
+        )
+    else:
+        out_bed.write(
+            f"{peak['chrom']}\t{peak['start']}\t{peak['end']}\t"
+            f"{peak['score']:.6g}\t{peak['summit_start']}\t"
+            f"{peak['summit_end']}\t{peak['summit_score']:.6g}\n"
+        )
+
+
+def _write_chrom_peaks(out_bed, chrom, intervals, params, support_handles=None):
+    peaks = _call_chrom_peaks(chrom, intervals, params, support_handles)
+    for peak in peaks:
+        _write_peak_record(out_bed, peak, params)
+    return len(peaks)
+
+
+def _write_peak_file(output, write_func):
+    out_path = output
+    if out_path.endswith(".gz") and shutil.which("bgzip") is None:
+        out_path = out_path[:-3]  # strip .gz
+        warnings.warn(f"bgzip not found; writing uncompressed BED to {out_path}")
+
+    if out_path.endswith(".gz"):
+        with open(out_path, "wb") as raw_out:
+            proc = subprocess.Popen(["bgzip"], stdin=subprocess.PIPE, stdout=raw_out)
+            with io.TextIOWrapper(proc.stdin, encoding="utf-8") as out_bed:
+                n_peaks = write_func(out_bed)
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(f"bgzip exited with code {proc.returncode}")
+    else:
+        with open(out_path, "w") as out_bed:
+            n_peaks = write_func(out_bed)
+
+    return n_peaks, out_path
+
+
+def _records_to_bed3(records):
+    return pd.DataFrame(
+        [(r["chrom"], int(r["start"]), int(r["end"])) for r in records],
+        columns=["chrom", "start", "end"],
+    )
+
+
+def _candidate_intervals_to_bed3(chrom, intervals):
+    if not intervals:
+        return pd.DataFrame(columns=["chrom", "start", "end"])
+    rows = [(chrom, int(start), int(end)) for start, end, _ in merge_intervals(intervals)]
+    return pd.DataFrame(rows, columns=["chrom", "start", "end"])
+
+
+def _finite_scores(scores):
+    scores = np.asarray(scores, dtype=np.float32)
+    return scores[~np.isnan(scores)]
+
+
+def _write_calibration_table(path, thresholds, n_real, n_null, fdr, n_total):
+    recall = np.divide(
+        n_real,
+        n_total,
+        out=np.zeros_like(n_real, dtype=float),
+        where=n_total > 0,
+    )
+    table = pd.DataFrame(
+        {
+            "threshold": thresholds,
+            "n_real": n_real.astype(int),
+            "n_null": n_null,
+            "fdr": fdr,
+            "recall_proxy": recall,
+        }
+    )
+    table.to_csv(path, sep="\t", index=False, float_format="%.6g")
+
+
+def _default_raw_peak_output(output):
+    if output.endswith(".bed.gz"):
+        return f"{output[:-len('.bed.gz')]}.raw.bed.gz"
+    if output.endswith(".bed"):
+        return f"{output[:-len('.bed')]}.raw.bed"
+    if output.endswith(".gz"):
+        return f"{output[:-len('.gz')]}.raw.gz"
+    return f"{output}.raw"
 
 
 def cmd_score(args):
@@ -69,42 +328,8 @@ def cmd_score(args):
         ``verbose`` (bool)
             Whether to print progress messages.
     """
-    model_path = args.model
-    if model_path is None:
-        cached = try_to_load_from_cache(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
-        if cached is not None:
-            if args.verbose:
-                print(f"Loading pretrained weights from cache: {cached}")
-            model_path = cached
-        else:
-            if args.verbose:
-                print(
-                    f"No model specified — downloading pretrained weights from {HF_REPO_ID}..."
-                )
-            model_path = hf_hub_download(repo_id=HF_REPO_ID, filename=HF_MODEL_FILENAME)
-    device = args.device
-    if device == "cuda" and not torch.cuda.is_available():
-        if torch.backends.mps.is_available():
-            warnings.warn("CUDA not available, falling back to MPS.")
-            device = "mps"
-        else:
-            warnings.warn("CUDA not available, falling back to CPU.")
-            device = "cpu"
-    elif device == "mps" and not torch.backends.mps.is_available():
-        warnings.warn("MPS not available, falling back to CPU.")
-        device = "cpu"
-
-    model = load_model(model_path, device)
-
-    pl_bw = pybigtools.open(args.pl_bigwig)
-    pl_chrom_sizes = dict(pl_bw.chroms())
-    pl_bw.close()
-
-    mn_bw = pybigtools.open(args.mn_bigwig)
-    mn_chroms = set(mn_bw.chroms().keys())
-    mn_bw.close()
-
-    chrom_sizes = {c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms}
+    model, device = _load_trogdor_model(args.model, args.device, args.verbose)
+    chrom_sizes = _shared_chrom_sizes(args.pl_bigwig, args.mn_bigwig)
 
     chroms_to_score = (
         args.chroms if args.chroms is not None else list(chrom_sizes.keys())
@@ -196,112 +421,51 @@ def cmd_peaks(args):
         chrom_intervals[chrom] = ivals
     in_bw.close()
 
-    threshold = args.min_score
-    mode = getattr(args, "mode", "simple")
-    max_gap = getattr(args, "max_gap", 0)
-    min_width = getattr(args, "min_width", 0)
-    min_support_signal = getattr(args, "min_support_signal", 0.0)
-    support_plus = getattr(args, "support_plus_bigwig", None)
-    support_minus = getattr(args, "support_minus_bigwig", None)
-
-    if mode not in {"simple", "refined"}:
-        raise ValueError(f"Unknown peak-calling mode: {mode}")
-    if max_gap < 0:
-        raise ValueError("--max_gap must be >= 0.")
-    if min_width < 0:
-        raise ValueError("--min_width must be >= 0.")
-    if min_support_signal > 0 and mode != "refined":
-        raise ValueError("--min_support_signal is only supported with --mode refined.")
-    if min_support_signal > 0 and (support_plus is None or support_minus is None):
-        raise ValueError(
-            "--min_support_signal requires both --support_plus_bigwig and "
-            "--support_minus_bigwig."
-        )
-
-    support_handles = None
-    if min_support_signal > 0:
-        support_handles = (pybigtools.open(support_plus), pybigtools.open(support_minus))
-
-    def _has_support(chrom, start, end):
-        if support_handles is None:
-            return True
-        pl_bw, mn_bw = support_handles
-        pl = np.nan_to_num(np.array(pl_bw.values(chrom, start, end), dtype=np.float32))
-        mn = np.abs(
-            np.nan_to_num(np.array(mn_bw.values(chrom, start, end), dtype=np.float32))
-        )
-        return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
+    params = _peak_params(args)
 
     if args.verbose:
         n_pass = sum(
             1
             for ivals in chrom_intervals.values()
             for _, _, v in ivals
-            if v >= threshold
+            if v >= _candidate_threshold(params)
         )
         if n_pass == 0:
             print("No bins pass threshold; writing empty BED file")
         else:
-            print(f"Score threshold: {threshold:.6f} ({n_pass} bins pass)")
+            print(
+                f"Candidate threshold: {_candidate_threshold(params):.6f} "
+                f"({n_pass} bins pass)"
+            )
+
+    support_handles = _open_support_handles(params)
 
     def _write_peaks(out_bed):
         n = 0
         for chrom in sorted(chrom_sizes):
-            if mode == "simple":
-                passing = [
-                    (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
-                ]
-                for start, end, max_v in merge_intervals(passing):
-                    out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
-                    n += 1
-            elif mode == "refined":
-                for peak in call_peaks(
-                    chrom_intervals[chrom],
-                    min_score=threshold,
-                    max_gap=max_gap,
-                    min_width=min_width,
-                ):
-                    if not _has_support(chrom, peak["start"], peak["end"]):
-                        continue
-                    out_bed.write(
-                        f"{chrom}\t{peak['start']}\t{peak['end']}\t"
-                        f"{peak['score']:.6g}\t{peak['summit_start']}\t"
-                        f"{peak['summit_end']}\t{peak['summit_score']:.6g}\n"
-                    )
-                    n += 1
+            n += _write_chrom_peaks(
+                out_bed, chrom, chrom_intervals[chrom], params, support_handles
+            )
         return n
 
-    out_path = args.output
-    if out_path.endswith(".gz") and shutil.which("bgzip") is None:
-        out_path = out_path[:-3]  # strip .gz
-        warnings.warn(f"bgzip not found; writing uncompressed BED to {out_path}")
-
-    if out_path.endswith(".gz"):
-        with open(out_path, "wb") as raw_out:
-            proc = subprocess.Popen(["bgzip"], stdin=subprocess.PIPE, stdout=raw_out)
-            with io.TextIOWrapper(proc.stdin, encoding="utf-8") as out_bed:
-                n_peaks = _write_peaks(out_bed)
-            proc.wait()
-            if proc.returncode != 0:
-                raise RuntimeError(f"bgzip exited with code {proc.returncode}")
-    else:
-        with open(out_path, "w") as out_bed:
-            n_peaks = _write_peaks(out_bed)
+    try:
+        n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
+    finally:
+        if support_handles is not None:
+            support_handles[0].close()
+            support_handles[1].close()
 
     if args.verbose:
         print(f"{n_peaks} peaks written to {out_path}")
-
-    if support_handles is not None:
-        support_handles[0].close()
-        support_handles[1].close()
 
 
 def cmd_pipeline(args):
     """Run the full pipeline: score the genome, then call peaks.
 
-    Convenience wrapper that runs ``cmd_score`` followed by ``cmd_peaks``.
-    The intermediate probability bigWig is written to a temporary file and
-    deleted after peaks are called.  Only the final BED is kept:
+    Convenience wrapper that scores the genome, then calls peaks. By default,
+    peaks are called directly from streamed per-chromosome predictions without
+    materializing an intermediate score bigWig. If ``save_bigwig`` is provided,
+    the score bigWig is written and then re-used for peak calling.
 
     - ``output`` — bgzipped BED of peak calls (full path specified by caller)
 
@@ -317,8 +481,25 @@ def cmd_pipeline(args):
         ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
         ``verbose`` (bool).
     """
+    if getattr(args, "calibrate", False):
+        if args.n_shuffle <= 0:
+            raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
+        if args.n_thresholds <= 1:
+            raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
+        if not 0 <= args.calibration_fdr_target <= 1:
+            raise ValueError("--calibration_fdr_target must be in [0, 1].")
+        if getattr(args, "raw_output", None) == args.output:
+            raise ValueError("--raw_output must differ from --output.")
 
-    def _run(bw_prefix):
+    def _run_with_bigwig(bw_prefix):
+        peak_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "support_plus_bigwig": args.pl_bigwig,
+                "support_minus_bigwig": args.mn_bigwig,
+            }
+        )
+        score_min = _candidate_threshold(_peak_params(peak_args))
         cmd_score(
             argparse.Namespace(
                 model=args.model,
@@ -331,7 +512,7 @@ def cmd_pipeline(args):
                 output_stride=args.output_stride,
                 batch_size=args.batch_size,
                 chroms=args.chroms,
-                min_score=args.min_score,
+                min_score=score_min,
                 verbose=args.verbose,
                 num_workers=args.num_workers,
             )
@@ -344,6 +525,11 @@ def cmd_pipeline(args):
                 mode=getattr(args, "mode", "simple"),
                 max_gap=getattr(args, "max_gap", 0),
                 min_width=getattr(args, "min_width", 0),
+                max_width=getattr(args, "max_width", None),
+                seed_score=getattr(args, "seed_score", None),
+                smooth_bins=getattr(args, "smooth_bins", 1),
+                valley_fraction=getattr(args, "valley_fraction", 0.5),
+                boundary_fraction=getattr(args, "boundary_fraction", 0.0),
                 min_support_signal=getattr(args, "min_support_signal", 0.0),
                 support_plus_bigwig=args.pl_bigwig,
                 support_minus_bigwig=args.mn_bigwig,
@@ -351,16 +537,257 @@ def cmd_pipeline(args):
             )
         )
 
+    def _run_direct():
+        peak_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "support_plus_bigwig": args.pl_bigwig,
+                "support_minus_bigwig": args.mn_bigwig,
+            }
+        )
+        params = _peak_params(peak_args)
+        candidate_threshold = _candidate_threshold(params)
+        model, device = _load_trogdor_model(args.model, args.device, args.verbose)
+        chrom_sizes = _shared_chrom_sizes(args.pl_bigwig, args.mn_bigwig)
+        chroms_to_score = (
+            args.chroms if args.chroms is not None else list(chrom_sizes.keys())
+        )
+        support_handles = _open_support_handles(params)
+
+        def _write_peaks(out_bed):
+            n = 0
+            for chrom, chrom_len, probs in predict_genome(
+                model,
+                args.pl_bigwig,
+                args.mn_bigwig,
+                chroms=chroms_to_score,
+                output_stride=args.output_stride,
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                batch_size=args.batch_size,
+                transform=normalization,
+                device=device,
+                verbose=args.verbose,
+                num_workers=getattr(args, "num_workers", 0),
+            ):
+                bin_indices = np.where(probs >= candidate_threshold)[0]
+                intervals = [
+                    (
+                        int(i * args.output_stride),
+                        int((i + 1) * args.output_stride),
+                        float(probs[i]),
+                    )
+                    for i in bin_indices
+                ]
+                n += _write_chrom_peaks(
+                    out_bed, chrom, intervals, params, support_handles
+                )
+            return n
+
+        try:
+            n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
+        finally:
+            if support_handles is not None:
+                support_handles[0].close()
+                support_handles[1].close()
+
+        if args.verbose:
+            print(f"{n_peaks} peaks written to {out_path}")
+
+    def _run_direct_calibrated():
+        peak_args = argparse.Namespace(
+            **{
+                **vars(args),
+                "support_plus_bigwig": args.pl_bigwig,
+                "support_minus_bigwig": args.mn_bigwig,
+            }
+        )
+        params = _peak_params(peak_args)
+        candidate_threshold = _candidate_threshold(params)
+        model, device = _load_trogdor_model(args.model, args.device, args.verbose)
+        chrom_sizes = _shared_chrom_sizes(args.pl_bigwig, args.mn_bigwig)
+        chroms_to_score = (
+            args.chroms if args.chroms is not None else list(chrom_sizes.keys())
+        )
+        support_handles = _open_support_handles(params)
+        rng = np.random.default_rng(args.calibration_seed)
+        raw_output = args.raw_output or _default_raw_peak_output(args.output)
+
+        peak_records = []
+        real_score_lists = []
+        null_score_lists = []
+
+        try:
+            for chrom, chrom_len, probs in predict_genome(
+                model,
+                args.pl_bigwig,
+                args.mn_bigwig,
+                chroms=chroms_to_score,
+                output_stride=args.output_stride,
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+                batch_size=args.batch_size,
+                transform=normalization,
+                device=device,
+                verbose=args.verbose,
+                num_workers=getattr(args, "num_workers", 0),
+            ):
+                bin_indices = np.where(probs >= candidate_threshold)[0]
+                intervals = [
+                    (
+                        int(i * args.output_stride),
+                        int(min((i + 1) * args.output_stride, chrom_len)),
+                        float(probs[i]),
+                    )
+                    for i in bin_indices
+                ]
+                chrom_peaks = _call_chrom_peaks(
+                    chrom, intervals, params, support_handles
+                )
+                if len(chrom_peaks) == 0:
+                    continue
+
+                peak_records.extend(chrom_peaks)
+                chrom_peaks_df = _records_to_bed3(chrom_peaks)
+                real_scores = score_peaks_from_array(
+                    probs,
+                    chrom_peaks_df,
+                    chrom,
+                    args.output_stride,
+                    args.calibration_stat,
+                )
+                real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
+
+                if args.null_scope == "candidate":
+                    allowed_df = _candidate_intervals_to_bed3(chrom, intervals)
+                else:
+                    allowed_df = pd.DataFrame(
+                        [(chrom, 0, int(chrom_len))],
+                        columns=["chrom", "start", "end"],
+                    )
+
+                for _ in range(args.n_shuffle):
+                    null_df = shuffle_peaks_within_intervals(
+                        chrom_peaks_df,
+                        allowed_df,
+                        [chrom],
+                        rng,
+                    )
+                    null_scores = score_peaks_from_array(
+                        probs,
+                        null_df,
+                        chrom,
+                        args.output_stride,
+                        args.calibration_stat,
+                    )
+                    null_score_lists.append(_finite_scores(null_scores))
+        finally:
+            if support_handles is not None:
+                support_handles[0].close()
+                support_handles[1].close()
+
+        if len(peak_records) == 0:
+            def _write_empty(out_bed):
+                return 0
+
+            raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_empty)
+            n_peaks, out_path = _write_peak_file(args.output, _write_empty)
+            if args.verbose:
+                print(
+                    "No peaks before calibration; wrote empty raw/calibrated "
+                    f"BEDs to {raw_out_path} and {out_path}"
+                )
+            return
+
+        real_scores_all = (
+            np.concatenate(real_score_lists)
+            if real_score_lists
+            else np.array([], dtype=np.float32)
+        )
+        real_scores = _finite_scores(real_scores_all)
+        null_scores = (
+            np.concatenate(null_score_lists)
+            if null_score_lists
+            else np.array([], dtype=np.float32)
+        )
+
+        if len(real_scores) == 0:
+            raise ValueError("No finite peak scores available for calibration.")
+        if args.n_shuffle <= 0:
+            raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
+
+        thresholds, n_real, n_null, fdr = compute_fdr(
+            real_scores,
+            null_scores,
+            args.n_shuffle,
+            args.n_thresholds,
+        )
+        threshold_at_target, n_at_target = select_fdr_threshold(
+            thresholds, n_real, fdr, args.calibration_fdr_target
+        )
+
+        if args.calibration_curve is not None:
+            _write_calibration_table(
+                args.calibration_curve,
+                thresholds,
+                n_real,
+                n_null,
+                fdr,
+                len(real_scores),
+            )
+
+        if np.isnan(threshold_at_target):
+            passing = np.zeros(len(peak_records), dtype=bool)
+        else:
+            passing = real_scores_all >= threshold_at_target
+
+        def _write_raw(out_bed):
+            for peak in peak_records:
+                _write_peak_record(out_bed, peak, params)
+            return len(peak_records)
+
+        def _write_calibrated(out_bed):
+            n = 0
+            for peak, keep in zip(peak_records, passing):
+                if keep:
+                    _write_peak_record(out_bed, peak, params)
+                    n += 1
+            return n
+
+        raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_raw)
+        n_peaks, out_path = _write_peak_file(args.output, _write_calibrated)
+
+        if args.verbose:
+            print(f"Real peaks scored: {len(real_scores):,}")
+            print(
+                f"Null peaks scored: {len(null_scores):,} "
+                f"({args.n_shuffle} shuffle(s))"
+            )
+            print(f"Calibration stat: {args.calibration_stat}")
+            print(f"FDR target: {args.calibration_fdr_target:.3f}")
+            if np.isnan(threshold_at_target):
+                print("Score threshold: N/A (target FDR never reached)")
+            else:
+                print(f"Score threshold: {threshold_at_target:.6f}")
+                print(f"Peaks at target: {n_at_target:,}")
+            print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
+            print(f"{n_peaks} calibrated peaks written to {out_path}")
+
     if args.save_bigwig is not None:
+        if getattr(args, "calibrate", False):
+            raise ValueError(
+                "--calibrate uses streamed probabilities; omit --save_bigwig."
+            )
         bw_prefix = (
             args.save_bigwig[: -len(".prob.bw")]
             if args.save_bigwig.endswith(".prob.bw")
             else args.save_bigwig
         )
-        _run(bw_prefix)
+        _run_with_bigwig(bw_prefix)
+    elif getattr(args, "calibrate", False):
+        _run_direct_calibrated()
     else:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _run(os.path.join(tmpdir, "tmp"))
+        _run_direct()
 
 
 def cmd_fdr(args):

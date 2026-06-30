@@ -124,8 +124,8 @@ def cli():
     )
     parser_pipeline.add_argument(
         "--peak_mode",
-        choices=["simple", "refined"],
-        default="simple",
+        choices=["simple", "refined", "profile"],
+        default="profile",
         dest="mode",
         help="Peak caller to use after scoring (default: simple).",
     )
@@ -133,19 +133,100 @@ def cli():
         "--max_gap",
         type=int,
         default=0,
-        help="Refined peak caller only: merge passing blocks separated by at most this many bp.",
+        help="Refined/profile caller only: merge candidate blocks separated by at most this many bp.",
     )
     parser_pipeline.add_argument(
         "--min_width",
         type=int,
         default=0,
-        help="Refined peak caller only: discard called peaks narrower than this many bp.",
+        help="Refined/profile caller only: discard called peaks narrower than this many bp.",
+    )
+    parser_pipeline.add_argument(
+        "--max_width",
+        type=int,
+        default=None,
+        help="Profile caller only: discard called peaks wider than this many bp.",
+    )
+    parser_pipeline.add_argument(
+        "--seed_score",
+        type=float,
+        default=None,
+        help="Profile caller only: permissive score threshold used to seed candidate blocks.",
+    )
+    parser_pipeline.add_argument(
+        "--smooth_bins",
+        type=int,
+        default=1,
+        help="Profile caller only: number of score bins for local smoothing (default: 1).",
+    )
+    parser_pipeline.add_argument(
+        "--valley_fraction",
+        type=float,
+        default=0.5,
+        help="Profile caller only: split adjacent summits when the valley is below this fraction of the weaker summit.",
+    )
+    parser_pipeline.add_argument(
+        "--boundary_fraction",
+        type=float,
+        default=0.2,
+        help="Profile caller only: trim boundaries to bins above this fraction of the local summit.",
     )
     parser_pipeline.add_argument(
         "--min_support_signal",
         type=float,
         default=0.0,
-        help="Refined peak caller only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
+        help="Refined/profile caller only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
+    )
+    parser_pipeline.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Estimate an empirical FDR curve from streamed probabilities and write raw plus calibrated peak BEDs.",
+    )
+    parser_pipeline.add_argument(
+        "--raw_output",
+        default=None,
+        help="Raw peak BED path written with --calibrate before FDR filtering. Defaults to a .raw sibling of --output.",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_fdr_target",
+        type=float,
+        default=0.05,
+        help="Empirical FDR target used with --calibrate (default: 0.05).",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_curve",
+        default=None,
+        help="Optional TSV path for the streamed empirical FDR curve.",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_stat",
+        choices=["max", "mean"],
+        default="max",
+        help="Per-peak streamed probability statistic used for calibration (default: max).",
+    )
+    parser_pipeline.add_argument(
+        "--null_scope",
+        choices=["candidate", "genome"],
+        default="candidate",
+        help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
+    )
+    parser_pipeline.add_argument(
+        "--n_shuffle",
+        type=int,
+        default=20,
+        help="Number of empirical null shuffles used with --calibrate (default: 20).",
+    )
+    parser_pipeline.add_argument(
+        "--n_thresholds",
+        type=int,
+        default=200,
+        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 200).",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_seed",
+        type=int,
+        default=0,
+        help="Random seed for streamed empirical calibration (default: 0).",
     )
     parser_pipeline.add_argument(
         "--num_workers",
@@ -279,27 +360,57 @@ def cli():
     )
     parser_peaks.add_argument(
         "--mode",
-        choices=["simple", "refined"],
+        choices=["simple", "refined", "profile"],
         default="simple",
-        help="Peak-calling mode. 'simple' preserves historical threshold-and-merge behaviour; 'refined' adds max_gap/min_width and summit columns.",
+        help="Peak-calling mode. 'simple' preserves historical threshold-and-merge behaviour; 'refined' adds max_gap/min_width and summit columns; 'profile' adds local-maxima/valley splitting.",
     )
     parser_peaks.add_argument(
         "--max_gap",
         type=int,
         default=0,
-        help="Refined mode only: merge passing blocks separated by at most this many bp.",
+        help="Refined/profile mode only: merge candidate blocks separated by at most this many bp.",
     )
     parser_peaks.add_argument(
         "--min_width",
         type=int,
         default=0,
-        help="Refined mode only: discard called peaks narrower than this many bp.",
+        help="Refined/profile mode only: discard called peaks narrower than this many bp.",
+    )
+    parser_peaks.add_argument(
+        "--max_width",
+        type=int,
+        default=None,
+        help="Profile mode only: discard called peaks wider than this many bp.",
+    )
+    parser_peaks.add_argument(
+        "--seed_score",
+        type=float,
+        default=None,
+        help="Profile mode only: permissive score threshold used to seed candidate blocks.",
+    )
+    parser_peaks.add_argument(
+        "--smooth_bins",
+        type=int,
+        default=1,
+        help="Profile mode only: number of score bins for local smoothing (default: 1).",
+    )
+    parser_peaks.add_argument(
+        "--valley_fraction",
+        type=float,
+        default=0.5,
+        help="Profile mode only: split adjacent summits when the valley is below this fraction of the weaker summit.",
+    )
+    parser_peaks.add_argument(
+        "--boundary_fraction",
+        type=float,
+        default=0.0,
+        help="Profile mode only: trim boundaries to bins above this fraction of the local summit.",
     )
     parser_peaks.add_argument(
         "--min_support_signal",
         type=float,
         default=0.0,
-        help="Refined mode only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
+        help="Refined/profile mode only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
     )
     parser_peaks.add_argument(
         "--support_plus_bigwig",

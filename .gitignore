@@ -4,6 +4,7 @@ scripts/benchmark/**/*.txt
 scripts/benchmark/garbo/
 predictions/
 data/
+tmp/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
