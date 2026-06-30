@@ -154,15 +154,8 @@ def _call_chrom_peaks(chrom, intervals, params, support_handles=None):
 
     if mode == "simple":
         passing = [(s, e, v) for s, e, v in intervals if v >= threshold]
-        for start, end, max_v in merge_intervals(passing):
-            peaks.append(
-                {
-                    "chrom": chrom,
-                    "start": int(start),
-                    "end": int(end),
-                    "score": float(max_v),
-                }
-            )
+        for peak in call_peaks(passing, min_score=threshold):
+            peaks.append({"chrom": chrom, **peak})
     elif mode == "refined":
         for peak in call_peaks(
             intervals,
@@ -243,6 +236,23 @@ def _records_to_bed3(records):
         [(r["chrom"], int(r["start"]), int(r["end"])) for r in records],
         columns=["chrom", "start", "end"],
     )
+
+
+def _records_to_summit_bed3(records):
+    return pd.DataFrame(
+        [
+            (r["chrom"], int(r["summit_start"]), int(r["summit_end"]))
+            for r in records
+        ],
+        columns=["chrom", "start", "end"],
+    )
+
+
+def _score_peak_records_from_array(records, scores, chrom, output_stride, stat):
+    if stat == "summit":
+        return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
+    peaks_df = _records_to_bed3(records)
+    return score_peaks_from_array(scores, peaks_df, chrom, output_stride, stat)
 
 
 def _candidate_intervals_to_bed3(chrom, intervals):
@@ -488,6 +498,8 @@ def cmd_pipeline(args):
             raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
         if not 0 <= args.calibration_fdr_target <= 1:
             raise ValueError("--calibration_fdr_target must be in [0, 1].")
+        if args.calibration_stat not in {"summit", "max", "mean"}:
+            raise ValueError("--calibration_stat must be summit, max, or mean.")
         if getattr(args, "raw_output", None) == args.output:
             raise ValueError("--raw_output must differ from --output.")
 
@@ -649,9 +661,9 @@ def cmd_pipeline(args):
 
                 peak_records.extend(chrom_peaks)
                 chrom_peaks_df = _records_to_bed3(chrom_peaks)
-                real_scores = score_peaks_from_array(
+                real_scores = _score_peak_records_from_array(
+                    chrom_peaks,
                     probs,
-                    chrom_peaks_df,
                     chrom,
                     args.output_stride,
                     args.calibration_stat,
@@ -666,9 +678,14 @@ def cmd_pipeline(args):
                         columns=["chrom", "start", "end"],
                     )
 
+                null_source_df = (
+                    _records_to_summit_bed3(chrom_peaks)
+                    if args.calibration_stat == "summit"
+                    else chrom_peaks_df
+                )
                 for _ in range(args.n_shuffle):
                     null_df = shuffle_peaks_within_intervals(
-                        chrom_peaks_df,
+                        null_source_df,
                         allowed_df,
                         [chrom],
                         rng,
@@ -678,7 +695,11 @@ def cmd_pipeline(args):
                         null_df,
                         chrom,
                         args.output_stride,
-                        args.calibration_stat,
+                        (
+                            "max"
+                            if args.calibration_stat == "summit"
+                            else args.calibration_stat
+                        ),
                     )
                     null_score_lists.append(_finite_scores(null_scores))
         finally:
