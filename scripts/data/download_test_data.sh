@@ -16,7 +16,7 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/GSM1480325/suppl/GSM1480325%5FK562%5FGROseq%5Fplus.bigWig -O "$DATA_DIR"/K562_groseq.pl.bw
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/GSM1480325/suppl/GSM1480325%5FK562%5FGROseq%5Fminus.bigWig -O "$DATA_DIR"/K562_groseq.mn.bw
 
-# Jurkat PRO-seq/ChRO-seq goes here.
+# Jurkat PRO-seq/ChRO-seq
 
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/GSM3309955/suppl/GSM3309955%5F5587%5F5598%5F24204%5FHGC2FBGXX%5FJ%5FNUC%5FTTAGGC%5FR1%5Fplus%2Ebw -O "$DATA_DIR"/Jurkat_PROseq.pl.bw
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/GSM3309955/suppl/GSM3309955%5F5587%5F5598%5F24204%5FHGC2FBGXX%5FJ%5FNUC%5FTTAGGC%5FR1%5Fminus%2Ebw -O "$DATA_DIR"/Jurkat_PROseq.mn.bw
@@ -32,7 +32,7 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/
 HG19_SIZES="${DATA_DIR}/hg19.chrom.sizes"
 
 bigWigMerge "$DATA_DIR"/Jurkat_ChROseq_1.pl.bw "$DATA_DIR"/Jurkat_ChROseq_2.pl.bw "$DATA_DIR"/Jurkat_ChROseq.pl.bg
-bigWigMerge --threshold=-10000000 "$DATA_DIR"/Jurkat_ChROseq_1.mn.bw "$DATA_DIR"/Jurkat_ChROseq_2.mn.bw "$DATA_DIR"/Jurkat_ChROseq.mn.bg
+bigWigMerge -threshold=-10000000 "$DATA_DIR"/Jurkat_ChROseq_1.mn.bw "$DATA_DIR"/Jurkat_ChROseq_2.mn.bw "$DATA_DIR"/Jurkat_ChROseq.mn.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/Jurkat_ChROseq.pl.bg > "$DATA_DIR"/Jurkat_ChROseq.sort.pl.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/Jurkat_ChROseq.mn.bg > "$DATA_DIR"/Jurkat_ChROseq.sort.mn.bg
 bedGraphToBigWig "$DATA_DIR"/Jurkat_ChROseq.sort.pl.bg "$HG19_SIZES" "$DATA_DIR"/Jurkat_ChROseq.pl.bw
@@ -47,7 +47,7 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/
 HG38_SIZES="${DATA_DIR}/hg38.chrom.sizes"
 
 bigWigMerge "$DATA_DIR"/K562_mnetseq_1.pl.bw "$DATA_DIR"/K562_mnetseq_2.pl.bw "$DATA_DIR"/K562_mnetseq.pl.bg
-bigWigMerge --threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
+bigWigMerge -threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.pl.bg > "$DATA_DIR"/K562_mnetseq.sort.pl.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.mn.bg > "$DATA_DIR"/K562_mnetseq.sort.mn.bg
 bedGraphToBigWig "$DATA_DIR"/K562_mnetseq.sort.pl.bg "$HG38_SIZES" "$DATA_DIR"/K562_mnetseq.pl.bw
