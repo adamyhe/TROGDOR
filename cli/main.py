@@ -200,9 +200,9 @@ def cli():
     )
     parser_pipeline.add_argument(
         "--calibration_stat",
-        choices=["max", "mean"],
-        default="max",
-        help="Per-peak streamed probability statistic used for calibration (default: max).",
+        choices=["summit", "max", "mean"],
+        default="summit",
+        help="Per-peak streamed probability statistic used for calibration (default: summit).",
     )
     parser_pipeline.add_argument(
         "--null_scope",

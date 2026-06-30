@@ -100,18 +100,20 @@ A profile-aware caller is also available for local peak-shape refinement:
 
 ```bash
 trogdor peaks -i mysample.prob.bw -o mysample.profile.bed \
-  --mode profile --min_score 0.95 --seed_score 0.5 \
-  --max_gap 32 --valley_fraction 0.5 --boundary_fraction 0.2
+  --mode profile --min_score 0.95 --seed_score 0.5
 ```
 
 The profile caller uses TROGDOR scores non-parametrically: it seeds candidate
 blocks at `--seed_score`, splits nearby local summits only when the intervening
 valley is sufficiently deep, trims optional low-scoring shoulders, and reports
-summit columns. If `score` and `peaks` are run separately, the score bigWig must
-have been written with a storage threshold no higher than the intended
-`--seed_score`. The one-step `pipeline` command avoids writing an intermediate
-score bigWig by default, so profile calling can use a lower `--seed_score`
-without materializing that score track unless `--save_bigwig` is explicitly set.
+summit columns. `--max_gap`, `--smooth_bins`, `--valley_fraction`, and
+`--boundary_fraction` are tuning knobs for held-out benchmarking rather than
+recommended constants. If `score` and `peaks` are run separately, the score
+bigWig must have been written with a storage threshold no higher than the
+intended `--seed_score`. The one-step `pipeline` command avoids writing an
+intermediate score bigWig by default, so profile calling can use a lower
+`--seed_score` without materializing that score track unless `--save_bigwig` is
+explicitly set.
 
 The one-step pipeline can also calibrate the caller empirically from streamed
 per-chromosome probabilities, without writing a dense probability bigWig:
@@ -125,14 +127,15 @@ trogdor pipeline -p plus.bw -m minus.bw -o mysample.profile.fdr05.bed.gz \
 ```
 
 With `--calibrate`, TROGDOR first calls candidate peaks from the streamed
-probabilities, then builds a non-parametric null by shuffling peak widths within
-the thresholded candidate intervals by default (`--null_scope candidate`). The
-raw BED is written to `--raw_output` (or a `.raw` sibling of `--output` when
-omitted), and the final `--output` BED contains peaks whose streamed max (or
-`--calibration_stat mean`) score reaches the empirical FDR target. Use
-`--null_scope genome` to shuffle within whole chromosomes instead. `--calibrate`
-currently uses the streaming pipeline path and should be run without
-`--save_bigwig`.
+probabilities, then builds a non-parametric null within the thresholded
+candidate intervals by default (`--null_scope candidate`). The raw BED is
+written to `--raw_output` (or a `.raw` sibling of `--output` when omitted), and
+the final `--output` BED contains peaks whose summit score reaches the empirical
+FDR target. The default `--calibration_stat summit` shuffles summit-sized
+windows for the null; `--calibration_stat max` or `mean` instead shuffles full
+peak intervals and scores the interval body. Use `--null_scope genome` to
+shuffle within whole chromosomes instead. `--calibrate` currently uses the
+streaming pipeline path and should be run without `--save_bigwig`.
 
 ### Empirical FDR estimation and `min_score` calibration
 

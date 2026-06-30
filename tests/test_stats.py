@@ -38,7 +38,10 @@ def _load_commands_module():
     return module
 
 
-_default_raw_peak_output = _load_commands_module()._default_raw_peak_output
+_commands = _load_commands_module()
+_call_chrom_peaks = _commands._call_chrom_peaks
+_default_raw_peak_output = _commands._default_raw_peak_output
+_score_peak_records_from_array = _commands._score_peak_records_from_array
 
 
 def test_score_peaks_from_array_uses_output_stride_bins():
@@ -92,3 +95,54 @@ def test_default_raw_peak_output_uses_bed_sibling():
         == "sample.profile.fdr05.raw.bed.gz"
     )
     assert _default_raw_peak_output("sample.bed") == "sample.raw.bed"
+
+
+def test_simple_peak_records_include_summit_for_calibration():
+    params = {
+        "threshold": 0.5,
+        "mode": "simple",
+        "max_gap": 0,
+        "min_width": 0,
+        "max_width": None,
+        "seed_score": None,
+        "smooth_bins": 1,
+        "valley_fraction": 0.5,
+        "boundary_fraction": 0.0,
+        "min_support_signal": 0.0,
+    }
+
+    peaks = _call_chrom_peaks(
+        "chr1",
+        [(0, 16, 0.6), (16, 32, 0.9), (48, 64, 0.8)],
+        params,
+    )
+
+    assert peaks[0]["start"] == 0
+    assert peaks[0]["end"] == 32
+    assert peaks[0]["summit_start"] == 16
+    assert peaks[0]["summit_score"] == pytest.approx(0.9)
+
+
+def test_summit_calibration_score_uses_recorded_summit_score():
+    records = [
+        {
+            "chrom": "chr1",
+            "start": 0,
+            "end": 48,
+            "score": 0.9,
+            "summit_start": 16,
+            "summit_end": 32,
+            "summit_score": 0.9,
+        }
+    ]
+    scores = np.array([0.2, 0.9, 0.3], dtype=np.float32)
+
+    out = _score_peak_records_from_array(
+        records,
+        scores,
+        "chr1",
+        output_stride=16,
+        stat="summit",
+    )
+
+    assert out[0] == pytest.approx(0.9)
