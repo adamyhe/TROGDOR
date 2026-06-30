@@ -16,9 +16,9 @@ wget --no-check-certificate https://www.encodeproject.org/files/ENCFF963WTD/@@do
 gunzip -c "$DATA_DIR/ENCFF051LUE.bed.gz" "$DATA_DIR/ENCFF963WTD.bed.gz" | cut -f1-3 > "$DATA_DIR/ENCSR220XSM_peaks.bed"
 
 # Download ENCODE cCREs
-# GM12878
-wget --no-check-certificate https://downloads.wenglab.org/Registry-V4/ENCFF428XFI_ENCFF280PUF_ENCFF469WVA_ENCFF644EEX.bed -O "$DATA_DIR/K562_ENCODE_cCRE.hg38.bed"
 # K562
+wget --no-check-certificate https://downloads.wenglab.org/Registry-V4/ENCFF428XFI_ENCFF280PUF_ENCFF469WVA_ENCFF644EEX.bed -O "$DATA_DIR/K562_ENCODE_cCRE.hg38.bed"
+# GM12878
 wget --no-check-certificate https://downloads.wenglab.org/Registry-V4/ENCFF414OGC_ENCFF806YEZ_ENCFF849TDM_ENCFF736UDR.bed -O "$DATA_DIR/GM12878_ENCODE_cCRE.hg38.bed"
 # HeLa
 wget --no-check-certificate https://downloads.wenglab.org/Registry-V4/ENCFF757GHL_ENCFF432PYK_ENCFF658XKZ_ENCFF179RSE.bed -O "$DATA_DIR/HeLa_ENCODE_cCRE.hg38.bed"

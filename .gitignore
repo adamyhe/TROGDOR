@@ -1,6 +1,7 @@
 **/.DS_Store
 **/.vscode
-scripts/benchmark/*.txt
+scripts/benchmark/**/*.txt
+scripts/benchmark/garbo/
 predictions/
 data/
 

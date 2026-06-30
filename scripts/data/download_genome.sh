@@ -9,7 +9,17 @@ wget --no-check-certificate \
     https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes \
     -O "$DATA_DIR/hg38.chrom.sizes"
 
+# hg19 chromosome sizes
+wget --no-check-certificate \
+    https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.chrom.sizes \
+    -O "$DATA_DIR/hg19.chrom.sizes"
+
 # hg38 -> hg19 liftOver chain
 wget --no-check-certificate \
     'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg38ToHg19.over.chain.gz' \
     -O "$DATA_DIR/hg38ToHg19.over.chain.gz"
+
+# hg19 -> hg38 liftOver chain
+wget --no-check-certificate \
+    'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg19ToHg38.over.chain.gz' \
+    -O "$DATA_DIR/hg19ToHg38.over.chain.gz"
