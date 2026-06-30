@@ -21,5 +21,5 @@ wget --no-check-certificate \
 
 # hg19 -> hg38 liftOver chain
 wget --no-check-certificate \
-    'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg19ToHg38.over.chain.gz' \
+    'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz' \
     -O "$DATA_DIR/hg19ToHg38.over.chain.gz"
