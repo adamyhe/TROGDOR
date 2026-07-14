@@ -1,25 +1,53 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "trogdor"
 version = "0.1.3"
 description = "Transcription Run-On Grants Detection Of Regulatory elements (TROGDOR)"
 authors = [{ name = "Adam He", email = "adamyhe@gmail.com" }]
-license = { file = "LICENSE" }
 readme = "README.md"
-urls = { homepage = "https://github.com/adamyhe/trogdor" }
+license = { file = "LICENSE" }
 requires-python = ">= 3.9"
+keywords = [
+    "bioinformatics",
+    "deep-learning",
+    "genomics",
+    "gro-seq",
+    "pro-seq",
+    "peak calling",
+    "transcription",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
-    "torch",
-    "torcheval",
-    "pybigtools",
+    "huggingface_hub",
     "numpy",
     "pandas",
+    "pybigtools",
+    "torch",
+    "torcheval",
     "tqdm",
-    "huggingface_hub",
 ]
+
+[project.urls]
+Homepage = "https://github.com/adamyhe/TROGDOR"
+Repository = "https://github.com/adamyhe/TROGDOR"
+Issues = "https://github.com/adamyhe/TROGDOR/issues"
+Weights = "https://huggingface.co/adamyhe/TROGDOR"
 
 [project.scripts]
 TROGDOR = "cli.main:cli"
@@ -28,11 +56,20 @@ dREG = "cli.main:cli"
 dreg = "cli.main:cli"
 
 [project.optional-dependencies]
-dev = ["pytest", "wandb", "matplotlib", "scikit-learn"]
+dev = ["matplotlib", "pytest", "scikit-learn", "wandb"]
 
-[tool.setuptools]
-package-dir = { "" = "src", "cli" = "cli" }
-packages = ["chiaroscuro", "cli"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/chiaroscuro", "cli"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/cli",
+    "/src/chiaroscuro",
+    "/tests",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

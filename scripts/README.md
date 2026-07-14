@@ -91,10 +91,11 @@ the `lr_search` group.
 
 ### Weights & Biases
 
-The script initializes a wandb run automatically. Install wandb first:
+The script initializes a wandb run automatically. Install the development
+dependencies as described in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), then
+log in:
 
 ```bash
-pip install -e ".[dev]"
 wandb login
 ```
 
