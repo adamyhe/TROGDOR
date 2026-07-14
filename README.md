@@ -22,13 +22,13 @@ Or with pip inside a conda/venv environment:
 pip install trogdor
 ```
 
-Or install the latest development version directly from GitHub:
+If you want to use TROGDOR as a dependency in a uv-managed Python project:
 
 ```bash
-pip install git+https://github.com/adamyhe/TROGDOR.git
-# or with uv:
-uv tool install git+https://github.com/adamyhe/TROGDOR.git
+uv add trogdor
 ```
+
+For development from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 

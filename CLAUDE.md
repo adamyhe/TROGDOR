@@ -12,6 +12,12 @@ TROGDOR is a deep learning method for identifying transcription initiation regio
 uv tool install trogdor
 ```
 
+For use as a dependency in a uv-managed Python project:
+
+```bash
+uv add trogdor
+```
+
 For development from source, see `CONTRIBUTING.md`.
 
 The package installs two CLI aliases that invoke the same entry point: `TROGDOR`, `trogdor`.
