@@ -16,7 +16,7 @@ import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.data_transforms import normalization
-from chiaroscuro.peaks import call_peaks, call_profile_peaks
+from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.stats import (
     compute_fdr,
@@ -82,7 +82,7 @@ def _peak_params(args):
         "min_width": getattr(args, "min_width", 0),
         "max_width": getattr(args, "max_width", None),
         "seed_score": getattr(args, "seed_score", None),
-        "smooth_bins": getattr(args, "smooth_bins", 1),
+        "smooth_bins": getattr(args, "smooth_bins", 3),
         "valley_fraction": getattr(args, "valley_fraction", 0.5),
         "boundary_fraction": getattr(args, "boundary_fraction", 0.0),
         "min_support_signal": getattr(args, "min_support_signal", 0.0),
@@ -106,6 +106,8 @@ def _peak_params(args):
         raise ValueError("--boundary_fraction must be in [0, 1].")
     if params["seed_score"] is not None and params["seed_score"] > threshold:
         raise ValueError("--seed_score must be <= --min_score.")
+    if mode == "profile":
+        params["seed_score"] = resolve_seed_score(threshold, params["seed_score"])
     if params["min_support_signal"] > 0 and mode not in {"refined", "profile"}:
         raise ValueError(
             "--min_support_signal is only supported with --mode refined/profile."
@@ -255,6 +257,26 @@ def _score_peak_records_from_array(records, scores, chrom, output_stride, stat):
     return score_peaks_from_array(scores, peaks_df, chrom, output_stride, stat)
 
 
+def _score_peak_records_from_bigwig(records, bw, chrom_sizes, chrom, stat):
+    if stat == "summit":
+        return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
+    peaks_df = _records_to_bed3(records)
+    return score_peaks(bw, peaks_df, chrom_sizes, stat, [chrom])
+
+
+def _validate_calibration_args(args):
+    if args.n_shuffle <= 0:
+        raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
+    if args.n_thresholds <= 1:
+        raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
+    if not 0 <= args.calibration_fdr_target <= 1:
+        raise ValueError("--calibration_fdr_target must be in [0, 1].")
+    if args.calibration_stat not in {"summit", "max", "mean"}:
+        raise ValueError("--calibration_stat must be summit, max, or mean.")
+    if getattr(args, "raw_output", None) == args.output:
+        raise ValueError("--raw_output must differ from --output.")
+
+
 def _candidate_intervals_to_bed3(chrom, intervals):
     if not intervals:
         return pd.DataFrame(columns=["chrom", "start", "end"])
@@ -400,6 +422,12 @@ def cmd_peaks(args):
     Output is written as plain text unless ``args.output`` ends with ``".gz"``,
     in which case it is piped through ``bgzip``.
 
+    If ``args.calibrate`` is set, peaks are instead calibrated against an
+    empirical null built by shuffling peaks within the input bigWig, mirroring
+    ``cmd_pipeline``'s streamed calibration but reading scores directly from
+    the bigWig instead of re-running the model. Raw (pre-filter) and
+    calibrated peak BEDs are written separately.
+
     Parameters
     ----------
     args : argparse.Namespace
@@ -414,6 +442,9 @@ def cmd_peaks(args):
         ``verbose`` (bool)
             Whether to print progress messages.
     """
+    if getattr(args, "calibrate", False):
+        _validate_calibration_args(args)
+
     in_bw = pybigtools.open(args.input)
     chrom_sizes = dict(in_bw.chroms())
 
@@ -429,9 +460,17 @@ def cmd_peaks(args):
             if not np.isnan(v)
         ]
         chrom_intervals[chrom] = ivals
-    in_bw.close()
 
     params = _peak_params(args)
+
+    if getattr(args, "calibrate", False):
+        try:
+            _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params)
+        finally:
+            in_bw.close()
+        return
+
+    in_bw.close()
 
     if args.verbose:
         n_pass = sum(
@@ -469,6 +508,139 @@ def cmd_peaks(args):
         print(f"{n_peaks} peaks written to {out_path}")
 
 
+def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
+    candidate_threshold = _candidate_threshold(params)
+    support_handles = _open_support_handles(params)
+    rng = np.random.default_rng(args.calibration_seed)
+    raw_output = args.raw_output or _default_raw_peak_output(args.output)
+
+    peak_records = []
+    real_score_lists = []
+    null_score_lists = []
+
+    try:
+        for chrom in sorted(chrom_sizes):
+            intervals = chrom_intervals[chrom]
+            chrom_peaks = _call_chrom_peaks(chrom, intervals, params, support_handles)
+            if len(chrom_peaks) == 0:
+                continue
+
+            peak_records.extend(chrom_peaks)
+            real_scores = _score_peak_records_from_bigwig(
+                chrom_peaks, in_bw, chrom_sizes, chrom, args.calibration_stat
+            )
+            real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
+
+            if args.null_scope == "candidate":
+                candidate_ivals = [
+                    (s, e, v) for s, e, v in intervals if v >= candidate_threshold
+                ]
+                allowed_df = _candidate_intervals_to_bed3(chrom, candidate_ivals)
+            else:
+                allowed_df = pd.DataFrame(
+                    [(chrom, 0, int(chrom_sizes[chrom]))],
+                    columns=["chrom", "start", "end"],
+                )
+
+            null_source_df = (
+                _records_to_summit_bed3(chrom_peaks)
+                if args.calibration_stat == "summit"
+                else _records_to_bed3(chrom_peaks)
+            )
+            for _ in range(args.n_shuffle):
+                null_df = shuffle_peaks_within_intervals(
+                    null_source_df, allowed_df, [chrom], rng
+                )
+                null_scores = score_peaks(
+                    in_bw,
+                    null_df,
+                    chrom_sizes,
+                    "max" if args.calibration_stat == "summit" else args.calibration_stat,
+                    [chrom],
+                )
+                null_score_lists.append(_finite_scores(null_scores))
+    finally:
+        if support_handles is not None:
+            support_handles[0].close()
+            support_handles[1].close()
+
+    if len(peak_records) == 0:
+        def _write_empty(out_bed):
+            return 0
+
+        raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_empty)
+        n_peaks, out_path = _write_peak_file(args.output, _write_empty)
+        if args.verbose:
+            print(
+                "No peaks before calibration; wrote empty raw/calibrated "
+                f"BEDs to {raw_out_path} and {out_path}"
+            )
+        return
+
+    real_scores_all = (
+        np.concatenate(real_score_lists)
+        if real_score_lists
+        else np.array([], dtype=np.float32)
+    )
+    real_scores = _finite_scores(real_scores_all)
+    null_scores = (
+        np.concatenate(null_score_lists)
+        if null_score_lists
+        else np.array([], dtype=np.float32)
+    )
+
+    if len(real_scores) == 0:
+        raise ValueError("No finite peak scores available for calibration.")
+
+    thresholds, n_real, n_null, fdr = compute_fdr(
+        real_scores, null_scores, args.n_shuffle, args.n_thresholds
+    )
+    threshold_at_target, n_at_target = select_fdr_threshold(
+        thresholds, n_real, fdr, args.calibration_fdr_target
+    )
+
+    if args.calibration_curve is not None:
+        _write_calibration_table(
+            args.calibration_curve, thresholds, n_real, n_null, fdr, len(real_scores)
+        )
+
+    if np.isnan(threshold_at_target):
+        passing = np.zeros(len(peak_records), dtype=bool)
+    else:
+        passing = real_scores_all >= threshold_at_target
+
+    def _write_raw(out_bed):
+        for peak in peak_records:
+            _write_peak_record(out_bed, peak, params)
+        return len(peak_records)
+
+    def _write_calibrated(out_bed):
+        n = 0
+        for peak, keep in zip(peak_records, passing):
+            if keep:
+                _write_peak_record(out_bed, peak, params)
+                n += 1
+        return n
+
+    raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_raw)
+    n_peaks, out_path = _write_peak_file(args.output, _write_calibrated)
+
+    if args.verbose:
+        print(f"Real peaks scored: {len(real_scores):,}")
+        print(
+            f"Null peaks scored: {len(null_scores):,} ({args.n_shuffle} shuffle(s))"
+        )
+        print(f"Calibration stat: {args.calibration_stat}")
+        print(f"FDR target: {args.calibration_fdr_target:.3f}")
+        if np.isnan(threshold_at_target):
+            print("Score threshold: N/A (target FDR never reached)")
+        else:
+            print(f"Score threshold: {threshold_at_target:.6f}")
+            print(f"Peaks at target: {n_at_target:,}")
+        print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
+        print(f"{n_peaks} calibrated peaks written to {out_path}")
+
+
 def cmd_pipeline(args):
     """Run the full pipeline: score the genome, then call peaks.
 
@@ -492,16 +664,7 @@ def cmd_pipeline(args):
         ``verbose`` (bool).
     """
     if getattr(args, "calibrate", False):
-        if args.n_shuffle <= 0:
-            raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
-        if args.n_thresholds <= 1:
-            raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
-        if not 0 <= args.calibration_fdr_target <= 1:
-            raise ValueError("--calibration_fdr_target must be in [0, 1].")
-        if args.calibration_stat not in {"summit", "max", "mean"}:
-            raise ValueError("--calibration_stat must be summit, max, or mean.")
-        if getattr(args, "raw_output", None) == args.output:
-            raise ValueError("--raw_output must differ from --output.")
+        _validate_calibration_args(args)
 
     def _run_with_bigwig(bw_prefix):
         peak_args = argparse.Namespace(
@@ -539,7 +702,7 @@ def cmd_pipeline(args):
                 min_width=getattr(args, "min_width", 0),
                 max_width=getattr(args, "max_width", None),
                 seed_score=getattr(args, "seed_score", None),
-                smooth_bins=getattr(args, "smooth_bins", 1),
+                smooth_bins=getattr(args, "smooth_bins", 3),
                 valley_fraction=getattr(args, "valley_fraction", 0.5),
                 boundary_fraction=getattr(args, "boundary_fraction", 0.0),
                 min_support_signal=getattr(args, "min_support_signal", 0.0),
