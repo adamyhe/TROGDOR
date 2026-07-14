@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 
+def resolve_seed_score(min_score, seed_score):
+    """Resolve the profile caller's permissive candidate-seed threshold.
+
+    When unset, seeds at half of ``min_score`` (capped at 0.5) so local-maxima
+    and valley splitting has candidate blocks wider than a single bin to work
+    with, instead of silently collapsing to ``min_score``.
+    """
+    if seed_score is None:
+        return min(min_score, 0.5)
+    return seed_score
+
+
 def _validate_profile_params(
     seed_score,
     min_score,
@@ -215,8 +227,7 @@ def call_profile_peaks(
     permissive score threshold, then nearby local maxima are split when the
     intervening valley is deep enough.
     """
-    if seed_score is None:
-        seed_score = min_score
+    seed_score = resolve_seed_score(min_score, seed_score)
 
     _validate_profile_params(
         seed_score,

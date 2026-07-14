@@ -127,7 +127,7 @@ def cli():
         choices=["simple", "refined", "profile"],
         default="profile",
         dest="mode",
-        help="Peak caller to use after scoring (default: simple).",
+        help="Peak caller to use after scoring (default: profile).",
     )
     parser_pipeline.add_argument(
         "--max_gap",
@@ -151,13 +151,14 @@ def cli():
         "--seed_score",
         type=float,
         default=None,
-        help="Profile caller only: permissive score threshold used to seed candidate blocks.",
+        help="Profile caller only: permissive score threshold used to seed candidate blocks "
+        "(default: min(min_score, 0.5)).",
     )
     parser_pipeline.add_argument(
         "--smooth_bins",
         type=int,
-        default=1,
-        help="Profile caller only: number of score bins for local smoothing (default: 1).",
+        default=3,
+        help="Profile caller only: number of score bins for local smoothing (default: 3).",
     )
     parser_pipeline.add_argument(
         "--valley_fraction",
@@ -168,8 +169,8 @@ def cli():
     parser_pipeline.add_argument(
         "--boundary_fraction",
         type=float,
-        default=0.2,
-        help="Profile caller only: trim boundaries to bins above this fraction of the local summit.",
+        default=0.0,
+        help="Profile caller only: trim boundaries to bins above this fraction of the local summit (default: 0.0, disabled).",
     )
     parser_pipeline.add_argument(
         "--min_support_signal",
@@ -386,13 +387,14 @@ def cli():
         "--seed_score",
         type=float,
         default=None,
-        help="Profile mode only: permissive score threshold used to seed candidate blocks.",
+        help="Profile mode only: permissive score threshold used to seed candidate blocks "
+        "(default: min(min_score, 0.5)).",
     )
     parser_peaks.add_argument(
         "--smooth_bins",
         type=int,
-        default=1,
-        help="Profile mode only: number of score bins for local smoothing (default: 1).",
+        default=3,
+        help="Profile mode only: number of score bins for local smoothing (default: 3).",
     )
     parser_peaks.add_argument(
         "--valley_fraction",
@@ -421,6 +423,57 @@ def cli():
         "--support_minus_bigwig",
         default=None,
         help="Minus-strand raw signal bigWig used with --min_support_signal.",
+    )
+    parser_peaks.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Estimate an empirical FDR curve from the input bigWig and write raw plus calibrated peak BEDs.",
+    )
+    parser_peaks.add_argument(
+        "--raw_output",
+        default=None,
+        help="Raw peak BED path written with --calibrate before FDR filtering. Defaults to a .raw sibling of --output.",
+    )
+    parser_peaks.add_argument(
+        "--calibration_fdr_target",
+        type=float,
+        default=0.05,
+        help="Empirical FDR target used with --calibrate (default: 0.05).",
+    )
+    parser_peaks.add_argument(
+        "--calibration_curve",
+        default=None,
+        help="Optional TSV path for the empirical FDR curve.",
+    )
+    parser_peaks.add_argument(
+        "--calibration_stat",
+        choices=["summit", "max", "mean"],
+        default="summit",
+        help="Per-peak probability statistic used for calibration (default: summit).",
+    )
+    parser_peaks.add_argument(
+        "--null_scope",
+        choices=["candidate", "genome"],
+        default="candidate",
+        help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
+    )
+    parser_peaks.add_argument(
+        "--n_shuffle",
+        type=int,
+        default=20,
+        help="Number of empirical null shuffles used with --calibrate (default: 20).",
+    )
+    parser_peaks.add_argument(
+        "--n_thresholds",
+        type=int,
+        default=200,
+        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 200).",
+    )
+    parser_peaks.add_argument(
+        "--calibration_seed",
+        type=int,
+        default=0,
+        help="Random seed for empirical calibration (default: 0).",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"

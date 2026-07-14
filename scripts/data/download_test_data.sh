@@ -16,8 +16,7 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/GSM1480325/suppl/GSM1480325%5FK562%5FGROseq%5Fplus.bigWig -O "$DATA_DIR"/K562_groseq.pl.bw
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM1480nnn/GSM1480325/suppl/GSM1480325%5FK562%5FGROseq%5Fminus.bigWig -O "$DATA_DIR"/K562_groseq.mn.bw
 
-# Jurkat PRO-seq/ChRO-seq goes here.
-
+# Jurkat PRO-seq/ChRO-seq
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/GSM3309955/suppl/GSM3309955%5F5587%5F5598%5F24204%5FHGC2FBGXX%5FJ%5FNUC%5FTTAGGC%5FR1%5Fplus%2Ebw -O "$DATA_DIR"/Jurkat_PROseq.pl.bw
 wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/GSM3309955/suppl/GSM3309955%5F5587%5F5598%5F24204%5FHGC2FBGXX%5FJ%5FNUC%5FTTAGGC%5FR1%5Fminus%2Ebw -O "$DATA_DIR"/Jurkat_PROseq.mn.bw
 

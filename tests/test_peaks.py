@@ -15,7 +15,7 @@ sys.modules.setdefault("torcheval", torcheval)
 sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
 sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
-from chiaroscuro.peaks import call_peaks, call_profile_peaks
+from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
 
 
 def test_adjacent_bins_merge():
@@ -165,6 +165,31 @@ def test_profile_width_filters():
     assert (min_filtered[0]["start"], min_filtered[0]["end"]) == (0, 20)
     assert len(max_filtered) == 1
     assert (max_filtered[0]["start"], max_filtered[0]["end"]) == (40, 50)
+
+
+def test_resolve_seed_score_defaults_to_half_min_score():
+    assert resolve_seed_score(0.95, None) == pytest.approx(0.5)
+    assert resolve_seed_score(0.3, None) == pytest.approx(0.3)
+    assert resolve_seed_score(0.95, 0.8) == pytest.approx(0.8)
+
+
+def test_profile_default_seed_score_splits_without_explicit_seed():
+    # No seed_score passed: previously this fell back to seeding at
+    # min_score (0.9), which would have excluded the 0.55/0.6 shoulder bins
+    # entirely and prevented the valley split below from ever engaging.
+    intervals = [
+        (0, 10, 0.95),
+        (10, 20, 0.55),
+        (20, 30, 0.2),
+        (30, 40, 0.6),
+        (40, 50, 0.97),
+    ]
+
+    peaks = call_profile_peaks(intervals, min_score=0.9, valley_fraction=0.5)
+
+    assert len(peaks) == 2
+    assert (peaks[0]["start"], peaks[0]["end"]) == (0, 20)
+    assert (peaks[1]["start"], peaks[1]["end"]) == (30, 50)
 
 
 def test_invalid_profile_parameters_raise():
