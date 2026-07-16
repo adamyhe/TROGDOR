@@ -31,7 +31,7 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3309nnn/
 HG19_SIZES="${DATA_DIR}/hg19.chrom.sizes"
 
 bigWigMerge "$DATA_DIR"/Jurkat_ChROseq_1.pl.bw "$DATA_DIR"/Jurkat_ChROseq_2.pl.bw "$DATA_DIR"/Jurkat_ChROseq.pl.bg
-bigWigMerge --threshold=-10000000 "$DATA_DIR"/Jurkat_ChROseq_1.mn.bw "$DATA_DIR"/Jurkat_ChROseq_2.mn.bw "$DATA_DIR"/Jurkat_ChROseq.mn.bg
+bigWigMerge -threshold=-10000000 "$DATA_DIR"/Jurkat_ChROseq_1.mn.bw "$DATA_DIR"/Jurkat_ChROseq_2.mn.bw "$DATA_DIR"/Jurkat_ChROseq.mn.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/Jurkat_ChROseq.pl.bg > "$DATA_DIR"/Jurkat_ChROseq.sort.pl.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/Jurkat_ChROseq.mn.bg > "$DATA_DIR"/Jurkat_ChROseq.sort.mn.bg
 bedGraphToBigWig "$DATA_DIR"/Jurkat_ChROseq.sort.pl.bg "$HG19_SIZES" "$DATA_DIR"/Jurkat_ChROseq.pl.bw
@@ -46,12 +46,11 @@ wget --no-check-certificate https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM3518nnn/
 HG38_SIZES="${DATA_DIR}/hg38.chrom.sizes"
 
 bigWigMerge "$DATA_DIR"/K562_mnetseq_1.pl.bw "$DATA_DIR"/K562_mnetseq_2.pl.bw "$DATA_DIR"/K562_mnetseq.pl.bg
-bigWigMerge --threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
+bigWigMerge -threshold=-10000000 "$DATA_DIR"/K562_mnetseq_1.mn.bw "$DATA_DIR"/K562_mnetseq_2.mn.bw "$DATA_DIR"/K562_mnetseq.mn.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.pl.bg > "$DATA_DIR"/K562_mnetseq.sort.pl.bg
 sort -k1,1 -k2,2n "$DATA_DIR"/K562_mnetseq.mn.bg > "$DATA_DIR"/K562_mnetseq.sort.mn.bg
 bedGraphToBigWig "$DATA_DIR"/K562_mnetseq.sort.pl.bg "$HG38_SIZES" "$DATA_DIR"/K562_mnetseq.pl.bw
 bedGraphToBigWig "$DATA_DIR"/K562_mnetseq.sort.mn.bg "$HG38_SIZES" "$DATA_DIR"/K562_mnetseq.mn.bw
 
 # HeLa mNET-seq goes here.
-
 

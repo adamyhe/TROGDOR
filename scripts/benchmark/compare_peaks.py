@@ -109,6 +109,33 @@ def read_bed(path):
     )
 
 
+def merge_intervals_df(df, chrom):
+    """Return merged non-overlapping intervals for ``chrom`` as start/end arrays."""
+    sub = df[df["chrom"] == chrom].sort_values(["start", "end"])
+    if len(sub) == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty
+
+    starts = sub["start"].to_numpy(dtype=np.int64)
+    ends = sub["end"].to_numpy(dtype=np.int64)
+    merged_starts = [int(starts[0])]
+    merged_ends = [int(ends[0])]
+
+    for start, end in zip(starts[1:], ends[1:]):
+        start = int(start)
+        end = int(end)
+        if start <= merged_ends[-1]:
+            merged_ends[-1] = max(merged_ends[-1], end)
+        else:
+            merged_starts.append(start)
+            merged_ends.append(end)
+
+    return (
+        np.array(merged_starts, dtype=np.int64),
+        np.array(merged_ends, dtype=np.int64),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Peak-level length-normalised overlap
 # ---------------------------------------------------------------------------
@@ -133,7 +160,7 @@ def coverage_fractions(query_df, subject_df, chrom):
         Coverage fraction in [0, 1] for each query peak.
     """
     q = query_df[query_df["chrom"] == chrom].sort_values("start")
-    s = subject_df[subject_df["chrom"] == chrom].sort_values("start")
+    s_starts, s_ends = merge_intervals_df(subject_df, chrom)
 
     if len(q) == 0:
         return np.empty(0, dtype=np.float32)
@@ -142,18 +169,15 @@ def coverage_fractions(query_df, subject_df, chrom):
     q_ends = q["end"].to_numpy()
     q_lens = (q_ends - q_starts).astype(np.float32)
 
-    if len(s) == 0:
+    if len(s_starts) == 0:
         return np.zeros(len(q), dtype=np.float32)
-
-    s_starts = s["start"].to_numpy()
-    s_ends = s["end"].to_numpy()
 
     fracs = np.empty(len(q), dtype=np.float32)
     for i in range(len(q)):
         qs, qe = q_starts[i], q_ends[i]
         # subject peaks that could overlap [qs, qe)
         # a subject peak [ss, se) overlaps if ss < qe and se > qs
-        lo = np.searchsorted(s_ends, qs + 1, side="left")   # se > qs
+        lo = np.searchsorted(s_ends, qs, side="right")       # se > qs
         hi = np.searchsorted(s_starts, qe, side="left")      # ss < qe
         if lo >= hi:
             fracs[i] = 0.0
@@ -198,7 +222,7 @@ def center_window_hits(query_df, subject_df, chrom, window):
         True where subject interval is overlapped by at least one query window.
     """
     q = query_df[query_df["chrom"] == chrom].sort_values("start")
-    s = subject_df[subject_df["chrom"] == chrom].sort_values("start")
+    s = subject_df[subject_df["chrom"] == chrom].sort_values(["start", "end"])
 
     n_q = len(q)
     n_s = len(s)
@@ -214,18 +238,28 @@ def center_window_hits(query_df, subject_df, chrom, window):
 
     s_starts = s["start"].to_numpy()
     s_ends   = s["end"].to_numpy()
+    merged_s_starts, merged_s_ends = merge_intervals_df(subject_df, chrom)
 
     q_hits = np.zeros(n_q, dtype=bool)
-    s_hits = np.zeros(n_s, dtype=bool)
-
-    for i in range(n_q):
-        ws, we = w_starts[i], w_ends[i]
+    for i, (ws, we) in enumerate(zip(w_starts, w_ends)):
         # subject intervals [ss, se) overlap [ws, we) iff ss < we and se > ws
-        lo = np.searchsorted(s_ends,    ws + 1, side="left")   # se > ws
-        hi = np.searchsorted(s_starts,  we,     side="left")   # ss < we
-        if lo < hi:
-            q_hits[i] = True
-            s_hits[lo:hi] = True
+        lo = np.searchsorted(merged_s_ends, ws, side="right")     # se > ws
+        hi = np.searchsorted(merged_s_starts, we, side="left")    # ss < we
+        q_hits[i] = lo < hi
+
+    windows_df = pd.DataFrame(
+        {
+            "chrom": chrom,
+            "start": w_starts.astype(np.int64),
+            "end": w_ends.astype(np.int64),
+        }
+    )
+    merged_w_starts, merged_w_ends = merge_intervals_df(windows_df, chrom)
+    s_hits = np.zeros(n_s, dtype=bool)
+    for i, (ss, se) in enumerate(zip(s_starts, s_ends)):
+        lo = np.searchsorted(merged_w_ends, ss, side="right")     # we > ss
+        hi = np.searchsorted(merged_w_starts, se, side="left")    # ws < se
+        s_hits[i] = lo < hi
 
     return q_hits, s_hits
 

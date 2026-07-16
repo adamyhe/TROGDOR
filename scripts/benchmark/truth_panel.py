@@ -113,24 +113,49 @@ def read_bed(path):
     )
 
 
+def merge_intervals_df(df, chrom):
+    """Return merged non-overlapping intervals for ``chrom`` as start/end arrays."""
+    sub = df[df["chrom"] == chrom].sort_values(["start", "end"])
+    if len(sub) == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty
+
+    starts = sub["start"].to_numpy(dtype=np.int64)
+    ends = sub["end"].to_numpy(dtype=np.int64)
+    merged_starts = [int(starts[0])]
+    merged_ends = [int(ends[0])]
+
+    for start, end in zip(starts[1:], ends[1:]):
+        start = int(start)
+        end = int(end)
+        if start <= merged_ends[-1]:
+            merged_ends[-1] = max(merged_ends[-1], end)
+        else:
+            merged_starts.append(start)
+            merged_ends.append(end)
+
+    return (
+        np.array(merged_starts, dtype=np.int64),
+        np.array(merged_ends, dtype=np.int64),
+    )
+
+
 def coverage_fractions(query_df, subject_df, chrom):
     q = query_df[query_df["chrom"] == chrom].sort_values("start")
-    s = subject_df[subject_df["chrom"] == chrom].sort_values("start")
+    s_starts, s_ends = merge_intervals_df(subject_df, chrom)
     if len(q) == 0:
         return np.empty(0, dtype=np.float32)
-    if len(s) == 0:
+    if len(s_starts) == 0:
         return np.zeros(len(q), dtype=np.float32)
 
     q_starts = q["start"].to_numpy(dtype=np.int64)
     q_ends = q["end"].to_numpy(dtype=np.int64)
     q_lens = (q_ends - q_starts).astype(np.float32)
-    s_starts = s["start"].to_numpy(dtype=np.int64)
-    s_ends = s["end"].to_numpy(dtype=np.int64)
 
     fracs = np.empty(len(q), dtype=np.float32)
     for i in range(len(q)):
         qs, qe = q_starts[i], q_ends[i]
-        lo = np.searchsorted(s_ends, qs + 1, side="left")
+        lo = np.searchsorted(s_ends, qs, side="right")
         hi = np.searchsorted(s_starts, qe, side="left")
         if lo >= hi:
             fracs[i] = 0.0
@@ -144,7 +169,7 @@ def coverage_fractions(query_df, subject_df, chrom):
 
 def center_window_hits(query_df, subject_df, chrom, window):
     q = query_df[query_df["chrom"] == chrom].sort_values("start")
-    s = subject_df[subject_df["chrom"] == chrom].sort_values("start")
+    s = subject_df[subject_df["chrom"] == chrom].sort_values(["start", "end"])
     if len(q) == 0:
         return np.empty(0, dtype=bool), np.zeros(len(s), dtype=bool)
     if len(s) == 0:
@@ -155,15 +180,27 @@ def center_window_hits(query_df, subject_df, chrom, window):
     w_ends = centers + window
     s_starts = s["start"].to_numpy()
     s_ends = s["end"].to_numpy()
+    merged_s_starts, merged_s_ends = merge_intervals_df(subject_df, chrom)
 
     q_hits = np.zeros(len(q), dtype=bool)
+    for i, (ws, we) in enumerate(zip(w_starts, w_ends)):
+        lo = np.searchsorted(merged_s_ends, ws, side="right")
+        hi = np.searchsorted(merged_s_starts, we, side="left")
+        q_hits[i] = lo < hi
+
+    windows_df = pd.DataFrame(
+        {
+            "chrom": chrom,
+            "start": w_starts.astype(np.int64),
+            "end": w_ends.astype(np.int64),
+        }
+    )
+    merged_w_starts, merged_w_ends = merge_intervals_df(windows_df, chrom)
     s_hits = np.zeros(len(s), dtype=bool)
-    for i in range(len(q)):
-        lo = np.searchsorted(s_ends, w_starts[i] + 1, side="left")
-        hi = np.searchsorted(s_starts, w_ends[i], side="left")
-        if lo < hi:
-            q_hits[i] = True
-            s_hits[lo:hi] = True
+    for i, (ss, se) in enumerate(zip(s_starts, s_ends)):
+        lo = np.searchsorted(merged_w_ends, ss, side="right")
+        hi = np.searchsorted(merged_w_starts, se, side="left")
+        s_hits[i] = lo < hi
     return q_hits, s_hits
 
 
@@ -174,16 +211,14 @@ def _overlaps_any(query_df, subject_df, chrom, window=0):
     if subject_df is None:
         return np.zeros(len(q), dtype=bool)
 
-    s = subject_df[subject_df["chrom"] == chrom].sort_values("start")
-    if len(s) == 0:
+    s_starts, s_ends = merge_intervals_df(subject_df, chrom)
+    if len(s_starts) == 0:
         return np.zeros(len(q), dtype=bool)
 
     q_starts = q["start"].to_numpy(dtype=np.int64) - window
     q_ends = q["end"].to_numpy(dtype=np.int64) + window
-    s_starts = s["start"].to_numpy(dtype=np.int64)
-    s_ends = s["end"].to_numpy(dtype=np.int64)
 
-    lo = np.searchsorted(s_ends, q_starts + 1, side="left")
+    lo = np.searchsorted(s_ends, q_starts, side="right")
     hi = np.searchsorted(s_starts, q_ends, side="left")
     return lo < hi
 
