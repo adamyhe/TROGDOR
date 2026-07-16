@@ -52,10 +52,8 @@ Weights = "https://huggingface.co/adamyhe/TROGDOR"
 [project.scripts]
 TROGDOR = "cli.main:cli"
 trogdor = "cli.main:cli"
-dREG = "cli.main:cli"
-dreg = "cli.main:cli"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["matplotlib", "pytest", "scikit-learn", "wandb"]
 
 [tool.hatch.build.targets.wheel]

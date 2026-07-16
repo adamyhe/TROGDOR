@@ -14,7 +14,7 @@ cd TROGDOR
 Install TROGDOR from source with development dependencies:
 
 ```bash
-uv sync --extra dev
+uv sync --group dev
 ```
 
 ## Tests
