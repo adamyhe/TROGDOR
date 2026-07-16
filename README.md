@@ -123,7 +123,8 @@ trogdor pipeline -p plus.bw -m minus.bw -o mysample.profile.fdr05.bed.gz \
   --peak_mode profile --min_score 0.95 --seed_score 0.5 \
   --calibrate --calibration_fdr_target 0.05 \
   --raw_output mysample.profile.raw.bed.gz \
-  --calibration_curve mysample.profile.fdr.tsv
+  --calibration_curve mysample.profile.fdr.tsv \
+  --calibration_figure mysample.profile.fdr.png
 ```
 
 With `--calibrate`, TROGDOR first calls candidate peaks from the streamed
@@ -136,6 +137,9 @@ windows for the null; `--calibration_stat max` or `mean` instead shuffles full
 peak intervals and scores the interval body. Use `--null_scope genome` to
 shuffle within whole chromosomes instead. `--calibrate` currently uses the
 streaming pipeline path and should be run without `--save_bigwig`.
+`--calibration_figure` writes a PNG/PDF/SVG-style figure, depending on the file
+extension accepted by matplotlib, showing real/null score distributions and the
+empirical FDR curve.
 
 ### Empirical FDR estimation and `min_score` calibration
 
