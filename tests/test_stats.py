@@ -42,6 +42,7 @@ _commands = _load_commands_module()
 _call_chrom_peaks = _commands._call_chrom_peaks
 _default_raw_peak_output = _commands._default_raw_peak_output
 _score_peak_records_from_array = _commands._score_peak_records_from_array
+_write_calibration_figure = _commands._write_calibration_figure
 
 
 def test_score_peaks_from_array_uses_output_stride_bins():
@@ -146,3 +147,29 @@ def test_summit_calibration_score_uses_recorded_summit_score():
     )
 
     assert out[0] == pytest.approx(0.9)
+
+
+def test_write_calibration_figure(tmp_path):
+    pytest.importorskip("matplotlib")
+
+    path = tmp_path / "calibration.png"
+    real_scores = np.array([0.9, 0.8, 0.4], dtype=np.float32)
+    null_scores = np.array([0.7, 0.3, 0.2], dtype=np.float32)
+    thresholds = np.array([0.2, 0.5, 0.8], dtype=np.float32)
+    n_real = np.array([3, 2, 2], dtype=float)
+    fdr = np.array([1.0, 0.25, 0.0], dtype=float)
+
+    _write_calibration_figure(
+        path,
+        real_scores,
+        null_scores,
+        thresholds,
+        n_real,
+        fdr,
+        "summit",
+        0.05,
+        0.8,
+    )
+
+    assert path.exists()
+    assert path.stat().st_size > 0

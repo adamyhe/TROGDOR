@@ -9,7 +9,7 @@ description = "Transcription Run-On Grants Detection Of Regulatory elements (TRO
 authors = [{ name = "Adam He", email = "adamyhe@gmail.com" }]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 keywords = [
     "bioinformatics",
     "deep-learning",
@@ -27,10 +27,10 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [

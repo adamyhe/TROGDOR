@@ -308,6 +308,117 @@ def _write_calibration_table(path, thresholds, n_real, n_null, fdr, n_total):
     table.to_csv(path, sep="\t", index=False, float_format="%.6g")
 
 
+def _write_calibration_figure(
+    path,
+    real_scores,
+    null_scores,
+    thresholds,
+    n_real,
+    fdr,
+    stat,
+    fdr_target,
+    threshold_at_target,
+):
+    try:
+        import matplotlib
+    except ImportError as exc:
+        raise RuntimeError(
+            "--calibration_figure requires matplotlib; install TROGDOR with "
+            "plotting/dev dependencies or omit this option."
+        ) from exc
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    recall = np.divide(
+        n_real,
+        len(real_scores),
+        out=np.zeros_like(n_real, dtype=float),
+        where=len(real_scores) > 0,
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(f"Empirical calibration ({stat})", fontsize=10)
+
+    ax = axes[0]
+    if len(thresholds) > 1 and thresholds[0] != thresholds[-1]:
+        bins = np.linspace(thresholds[0], thresholds[-1], 60)
+    else:
+        center = float(thresholds[0]) if len(thresholds) else 0.0
+        bins = np.linspace(center - 0.5, center + 0.5, 20)
+    ax.hist(
+        real_scores,
+        bins=bins,
+        density=True,
+        alpha=0.6,
+        color="steelblue",
+        label="real",
+    )
+    if len(null_scores) > 0:
+        ax.hist(
+            null_scores,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            color="salmon",
+            label="null",
+        )
+    if not np.isnan(threshold_at_target):
+        ax.axvline(
+            threshold_at_target,
+            color="black",
+            linestyle="--",
+            linewidth=1,
+            label=f"t={threshold_at_target:.3f}",
+        )
+    ax.set_xlabel(f"Peak score ({stat})")
+    ax.set_ylabel("Density")
+    ax.set_title("Score distributions")
+    ax.legend(fontsize=8)
+
+    ax = axes[1]
+    ax.plot(thresholds, fdr, color="black", linewidth=1.5, label="FDR")
+    ax.axhline(
+        fdr_target,
+        color="firebrick",
+        linestyle="--",
+        linewidth=0.8,
+        label=f"FDR={fdr_target:.3f}",
+    )
+    if not np.isnan(threshold_at_target):
+        ax.axvline(
+            threshold_at_target,
+            color="grey",
+            linestyle="--",
+            linewidth=0.8,
+            label=f"t={threshold_at_target:.3f}",
+        )
+    ax.set_xlabel(f"Score threshold ({stat})")
+    ax.set_ylabel("Empirical FDR")
+    ax.set_title("FDR and retained fraction")
+    ax.set_ylim(0, 1.05)
+
+    ax2 = ax.twinx()
+    ax2.plot(
+        thresholds,
+        recall,
+        color="steelblue",
+        linewidth=1.5,
+        label="Retained fraction",
+    )
+    ax2.set_ylabel("Retained fraction", color="steelblue")
+    ax2.tick_params(axis="y", labelcolor="steelblue")
+    ax2.set_ylim(0, 1.05)
+
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
+
+    plt.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 def _default_raw_peak_output(output):
     if output.endswith(".bed.gz"):
         return f"{output[:-len('.bed.gz')]}.raw.bed.gz"
@@ -603,6 +714,19 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
         _write_calibration_table(
             args.calibration_curve, thresholds, n_real, n_null, fdr, len(real_scores)
         )
+    calibration_figure = getattr(args, "calibration_figure", None)
+    if calibration_figure is not None:
+        _write_calibration_figure(
+            calibration_figure,
+            real_scores,
+            null_scores,
+            thresholds,
+            n_real,
+            fdr,
+            args.calibration_stat,
+            args.calibration_fdr_target,
+            threshold_at_target,
+        )
 
     if np.isnan(threshold_at_target):
         passing = np.zeros(len(peak_records), dtype=bool)
@@ -639,6 +763,8 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
             print(f"Peaks at target: {n_at_target:,}")
         print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
         print(f"{n_peaks} calibrated peaks written to {out_path}")
+        if calibration_figure is not None:
+            print(f"Saved calibration figure to {calibration_figure}")
 
 
 def cmd_pipeline(args):
@@ -919,6 +1045,19 @@ def cmd_pipeline(args):
                 fdr,
                 len(real_scores),
             )
+        calibration_figure = getattr(args, "calibration_figure", None)
+        if calibration_figure is not None:
+            _write_calibration_figure(
+                calibration_figure,
+                real_scores,
+                null_scores,
+                thresholds,
+                n_real,
+                fdr,
+                args.calibration_stat,
+                args.calibration_fdr_target,
+                threshold_at_target,
+            )
 
         if np.isnan(threshold_at_target):
             passing = np.zeros(len(peak_records), dtype=bool)
@@ -956,6 +1095,8 @@ def cmd_pipeline(args):
                 print(f"Peaks at target: {n_at_target:,}")
             print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
             print(f"{n_peaks} calibrated peaks written to {out_path}")
+            if calibration_figure is not None:
+                print(f"Saved calibration figure to {calibration_figure}")
 
     if args.save_bigwig is not None:
         if getattr(args, "calibrate", False):
