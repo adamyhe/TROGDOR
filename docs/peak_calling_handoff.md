@@ -160,54 +160,60 @@ below are motivated by that finding, not by the original geometric concerns.
 
 ## Next Steps (Post-Calibration-Experiment)
 
-1. **Fix candidate-null placement to exclude self/near territory — new top
-   priority.** `--calibration_null_log` plus a distance-to-nearest-real-summit
-   join (see `docs/trogdor_dreg_peak_calling_findings.md`'s "Null-Log
-   Diagnostic" section) showed that 99%+ of null draws that clear the FDR=0.05
-   threshold sit within ~1 output bin (25-28bp) of an actual real summit —
-   not "a comparably strong independent candidate," effectively the same
-   feature. `--null_scope candidate`'s allowed placement region (the union of
-   all `>= seed_score` blocks) is a scattered archipelago of tiny islands,
-   each *is* a real peak's own footprint, with no unclaimed non-peak
-   territory between them — so a shuffled draw can't land anywhere except on
-   or beside some real peak, often the one it was drawn from. This needs a
-   real fix at the null-construction level, not a scoring-scheme tweak:
-   e.g. a `shuffle_peaks_within_intervals` variant (or a new `null_scope`)
-   that subtracts a margin around every real peak's own footprint from the
-   allowed region before placing null draws, so a draw represents a genuine
-   "elsewhere" rather than a few bp from thyself. Needs scoping: how wide a
-   margin, whether margin should scale with peak width or smoothing window,
-   and what happens when a chromosome's candidate footprint is dominated by
-   peaks (little "elsewhere" left at all).
+1. **DONE, and closed as a dead end — candidate-null self-referential
+   contamination.** `--null_exclusion_margin` was implemented (subtracts
+   each called peak's own footprint, plus a margin, from the candidate-null
+   allowed region) and confirmed mechanically correct: re-run on G7/GM12878
+   at `margin=80` placed 100% of requested null draws with zero chromosomes
+   running short, and null draws no longer land adjacent to real peaks.
+   *But* this exposed a deeper, non-tunable problem:
+   `--null_scope candidate`'s "elsewhere" (candidate territory that never
+   produced a called peak) is mechanically capped at `min_score` — any
+   territory that ever cleared `min_score` would have become a peak and been
+   excluded. Real peaks are by definition `>= min_score`. So candidate-null
+   will let ~100% of real peaks through no matter what `min_score`,
+   `seed_score`, or margin is chosen — see
+   `docs/trogdor_dreg_peak_calling_findings.md`'s "Margin-Exclusion Fix
+   Confirmed, But Exposed a Deeper, Non-Tunable Problem" for the exact
+   numbers. Do not keep tuning this path; it cannot produce a graded FDR by
+   construction. The two ways out (only worth revisiting if independent
+   validation, below, turns out to be insufficient on its own):
+   - Exclude only the peak being tested from its own null territory (not
+     every peak globally), so null draws land on *other* real peaks. Breaks
+     the ceiling tautology, but becomes a relative-rank/triage measure, not
+     a strict FDR.
+   - A richer multi-feature split/merge/null-comparison decision (dREG's
+     random-forest role — valley depth, width, local candidate density,
+     coverage support) — but only meaningful once null draws represent
+     genuine alternatives, which requires the point above first.
 
-2. **A richer, multi-feature split/merge and/or null-comparison decision —
-   demoted, revisit only after #1.** Borrowing the role dREG's random
-   forest plays (valley depth, distance between maxima, width, local
-   candidate density, coverage support) assumed the null candidates were
-   genuine independent alternatives that a scalar score just couldn't rank.
-   The null-log diagnostic says that assumption doesn't hold — the null
-   isn't independent in the first place under the current construction, so
-   there's nothing yet to usefully rank against. Worth returning to once #1
-   is fixed and null draws represent genuine alternatives.
+2. **New top priority: lean on independent-ground-truth validation.**
+   `trogdor fdr` against ENCODE SCREEN cCREs / dREG / groHMM calls isn't
+   subject to the tautology above (the comparison isn't defined in terms of
+   the same threshold being tested) and has been available throughout —
+   it's been under-used in favor of chasing self-referential calibration.
+   Treat this as the actual quality bar for the profile caller + `min_score`
+   choice going forward, the same way the original benchmark comparisons in
+   `docs/trogdor_dreg_peak_calling_findings.md` were used before this
+   calibration detour started. The outstanding re-benchmark noted in that
+   doc's "Implementation Status" section (re-running
+   `scripts/benchmark/compare_peaks.py`/`truth_panel.py` and `trogdor fdr`
+   with `--mode profile` against dREG/PINTS/groHMM truth) is this work.
 
 3. **Informative-site pre-filtering at candidate-seeding time — still
-   demoted, likely low-value**, for the separate reason already established:
-   the prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
+   demoted, likely low-value**, for the reason already established: the
+   prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
    `prob.bw` before the legacy external-truth `trogdor fdr`; see
    `scripts/benchmark/_results/fdr.txt`, output
    `GM12878.trogdor.infp.groHMM.fdr.pdf`) flattened the null to zero without
-   fixing anything that was actually broken (the null there was already
-   well-separated from real without the mask — see
-   `GM12878.trogdor.groHMM.fdr.png`). That means the model's higher-scoring
-   output is already concentrated on genuinely covered positions — coverage
-   isn't the axis of ambiguity, self-referential null geometry is (#1).
+   fixing anything that was actually broken. Coverage was never the axis of
+   ambiguity in any of the self-referential-calibration findings above.
 
 4. **Centroid reporting + two-pass sparse-then-dense scoring** — lower
-   priority. These are mostly about output richness (probability-weighted
-   centroid alongside the summit) and summit-localization precision
-   (dREG scores informative sites sparsely first, then densifies inside
-   promising regions), not directly aimed at the calibration difficulty
-   above.
+   priority, unrelated to calibration. Output richness
+   (probability-weighted centroid alongside the summit) and
+   summit-localization precision (dREG scores informative sites sparsely
+   first, then densifies inside promising regions).
 
 ## Primary References Checked
 

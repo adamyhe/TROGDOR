@@ -280,14 +280,76 @@ from. The null is not failing to discriminate a real peak from a genuine
 alternative; under this construction it isn't an independent negative
 control at all.
 
-This changes the priority order in `docs/peak_calling_handoff.md`: a richer
-multi-feature ranking (dREG's random-forest role) assumed the null
-candidates were genuine, independent alternatives that a scalar score just
-couldn't rank — this diagnostic says that assumption doesn't hold, so fixing
-null *construction* (excluding a peak's own footprint, plus a margin, from
-serving as its own null territory) now comes first. Informative-site
-pre-filtering remains demoted for the separate reason given in the previous
+This motivated implementing exactly that fix (excluding a peak's own
+footprint, plus a margin, from serving as its own null territory) — see the
+next section, "Margin-Exclusion Fix Confirmed, But Exposed a Deeper,
+Non-Tunable Problem," for the result: the fix worked, but revealed that
+`--null_scope candidate` can't produce a graded FDR at all regardless of
+tuning, which supersedes the "multi-feature ranking comes next" framing
+below. Informative-site pre-filtering remains demoted for the separate
+reason given in the previous
 section (coverage isn't the axis of ambiguity either way).
+
+## Margin-Exclusion Fix Confirmed, But Exposed a Deeper, Non-Tunable Problem
+(2026-07-17)
+
+`--null_exclusion_margin` (see `docs/peak_calling_handoff.md`'s next steps)
+was implemented and re-run on G7/GM12878 at `margin=80`,
+`min_score=0.95`/`seed_score=0.5`/`null_scope=candidate`/
+`calibration_stat=smoothed_summit`. It worked mechanically: 701,160/701,160
+(G7) and 1,406,820/1,406,820 (GM12878) null draws were placed with zero
+chromosomes running short of "elsewhere" territory, and none of them land
+adjacent to a real peak anymore (the earlier ~25-28bp self-referential
+contamination is gone).
+
+But the FDR result was 100% pass at both a moderate threshold (0.889/0.917)
+and, on inspection, for a structural reason rather than a genuinely
+discriminating one:
+
+| | max null score | null quantile 0.999 | real peaks' min `summit_score` |
+| --- | --- | --- | --- |
+| G7 | 0.9507 | 0.9439 | 0.9504 |
+| GM12878 | 0.9513 | 0.9448 | 0.9504 |
+
+The null distribution's ceiling sits at essentially exactly `min_score`
+(0.95) in both samples — 99.999% of 700K-1.4M null draws score below it.
+This is not a coincidence and not fixable by choosing a different
+`min_score`, `seed_score`, or margin: `--null_scope candidate`'s "elsewhere"
+(the allowed region after margin-excluding called peaks) is defined as
+candidate territory (`>= seed_score`) that *never produced a called peak*.
+Producing a peak requires some bin in that seed block to clear `min_score`.
+So any seed block that ever reaches `min_score` becomes a peak and is
+removed from "elsewhere" by construction — "elsewhere" can only consist of
+blocks that never reached `min_score` anywhere, capping its ceiling at
+`min_score` for *any* choice of `min_score`. Real peaks are, by the same
+definition, always `>= min_score`. Comparing "things defined as clearing X"
+against "things defined as not clearing X" isn't an empirical question — the
+answer is baked into the definitions regardless of how the null is
+otherwise constructed.
+
+Conclusion: the margin fix correctly solved the self-referential-contamination
+problem it targeted, but `--null_scope candidate`'s "candidate minus called
+peaks" construction cannot produce a graded, informative FDR curve no matter
+how it's tuned from here — this is a structural dead end, not a parameter to
+keep searching over. Two ways to get a genuinely informative comparison from
+here:
+
+1. Exclude only the peak being tested from its own null territory (not all
+   peaks globally), so null draws can land on *other* real peaks. This
+   breaks the ceiling tautology (other peaks legitimately clear
+   `min_score`), but it stops being a strict FDR against "no signal" and
+   becomes a relative-rank/triage measure ("is this peak stronger than
+   typical peaks") — a different, and honestly weaker, guarantee than FDR.
+2. Stop investing further in self-referential candidate-null calibration and
+   rely on `trogdor fdr` against independent ground truth (ENCODE SCREEN
+   cCREs, dREG, groHMM calls) as the actual quality signal instead — this
+   has been available throughout and is not subject to the tautology above,
+   since the comparison isn't defined in terms of the same threshold being
+   tested.
+
+`docs/peak_calling_handoff.md`'s next-steps list is updated to reflect this;
+the working assumption going forward is direction 2 unless there's a
+specific reason to pursue 1.
 
 ## Sources Checked
 
