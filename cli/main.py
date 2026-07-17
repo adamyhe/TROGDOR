@@ -169,8 +169,8 @@ def cli():
     parser_pipeline.add_argument(
         "--boundary_fraction",
         type=float,
-        default=0.0,
-        help="Profile caller only: trim boundaries to bins above this fraction of the local summit (default: 0.0, disabled).",
+        default=0.95,
+        help="Profile caller only: trim boundaries to bins above this fraction of the way from seed_score to the local summit (0.0 disables trimming, 1.0 keeps only the summit bin).",
     )
     parser_pipeline.add_argument(
         "--min_support_signal",
@@ -311,8 +311,8 @@ def cli():
     parser_peaks.add_argument(
         "--mode",
         choices=["simple", "refined", "profile"],
-        default="simple",
-        help="Peak-calling mode. 'simple' preserves historical threshold-and-merge behaviour; 'refined' adds max_gap/min_width and summit columns; 'profile' adds local-maxima/valley splitting.",
+        default="profile",
+        help="Peak-calling mode (default: profile). 'simple' preserves historical threshold-and-merge behaviour; 'refined' adds max_gap/min_width and summit columns; 'profile' adds local-maxima/valley splitting.",
     )
     parser_peaks.add_argument(
         "--max_gap",
@@ -354,8 +354,8 @@ def cli():
     parser_peaks.add_argument(
         "--boundary_fraction",
         type=float,
-        default=0.0,
-        help="Profile mode only: trim boundaries to bins above this fraction of the local summit.",
+        default=0.95,
+        help="Profile mode only: trim boundaries to bins above this fraction of the way from seed_score to the local summit (0.0 disables trimming, 1.0 keeps only the summit bin).",
     )
     parser_peaks.add_argument(
         "--min_support_signal",

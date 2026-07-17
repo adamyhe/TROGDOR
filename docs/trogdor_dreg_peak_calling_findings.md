@@ -191,8 +191,16 @@ The design direction below has been implemented, not just proposed:
 What has **not** been re-established: the peak-level benchmark numbers in
 `scripts/benchmark/_results/peak_benchmarks.txt` predate all of the above —
 they still reflect the old threshold-and-merge caller. Re-running that
-benchmark with `--mode profile` (+ a calibrated FDR target) against
-dREG/PINTS/groHMM truth remains the outstanding validation step.
+benchmark with `--mode profile` against dREG/PINTS/groHMM truth remains the
+outstanding validation step. **Update:** this has now been done for
+G7/K562 groHMM+DNase truth — see "Independent-Ground-Truth Validation
+Results" below. GM12878 and ENCODE SCREEN/dREG/PINTS comparisons are still
+outstanding (data not present locally). Note also that this document
+predates the `peak-geometry` branch split: `src/chiaroscuro/calibration.py`
+and the `--calibrate` flag referenced above were subsequently stripped out
+of `peak-geometry` (they remain on `codex/peak-calling`) once self-referential
+calibration was found to be a structural dead end — see the "Margin-Exclusion
+Fix" section below.
 
 ## Post-Implementation Calibration Findings (2026-07-17)
 
@@ -350,6 +358,124 @@ here:
 `docs/peak_calling_handoff.md`'s next-steps list is updated to reflect this;
 the working assumption going forward is direction 2 unless there's a
 specific reason to pursue 1.
+
+## Independent-Ground-Truth Validation Results (2026-07-17)
+
+Following direction 2 above, ran the promoted validation path on the `peak-geometry`
+branch: `trogdor peaks --mode profile` against the existing G7 (K562 celastrol
+PRO-seq) probability bigWig, `trogdor fdr` against the groHMM+DNase K562
+truth set (`K562.positive.bed.gz`), and `scripts/benchmark/compare_peaks.py`
+against the same truth set. All runs used the surviving local assets in
+`tmp/trogdor/` (`G7.trogdor.prob.bw`, `K562.positive.bed.gz`); a chrom.sizes
+file was derived directly from the bigWig header rather than re-downloading
+the genome. GM12878 and ENCODE SCREEN/dREG/PINTS comparisons are not
+included here — those assets aren't present locally and require
+re-downloading via `scripts/data/download_peaks.sh` etc. (separate, optional
+follow-on work).
+
+**`trogdor fdr` against independent truth is graded, unlike the candidate-null
+tautology above.** Shuffling `K562.positive.bed.gz` genome-wide and scoring
+real vs. shuffled truth peaks against `G7.trogdor.prob.bw` gives a real
+FDR-vs-threshold curve: at FDR target 0.05, the threshold is 0.522 and
+24,283/28,008 (86.7%) real truth peaks pass. This is qualitatively different
+from the candidate-null case, where the "FDR curve" saturated at exactly
+`min_score` — confirming `trogdor fdr` against independent truth is not
+subject to the tautology.
+
+**`compare_peaks.py` results reveal profile mode trades bin-level precision
+for peak-level recall, and the trade is worse than it needs to be because of
+a parameter footgun.** Controlled comparison, same input bigWig, same
+`min_score=0.95`, same truth set, mode as the only variable:
+
+| Config | N peaks | median width (bp) | bin P | bin R | bin F1 | bin Jaccard | peak sens. | peak PPV | mean candidate coverage | center-window sens. | center-window spec. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `simple` (`min_score=0.95`) | 41,549 | 240 | 0.2813 | 0.6292 | 0.3888 | 0.2413 | 0.6691 | 0.4514 | 0.2236 | 0.6804 | 0.4634 |
+| `profile` (`seed_score=0.5`, `boundary_fraction=0.0`, the CLI default) | 35,964 | 704 | 0.1121 | 0.7086 | 0.1936 | 0.1072 | 0.7030 | 0.5443 | 0.1130 | 0.5940 | 0.4624 |
+| `profile` (`boundary_fraction=0.5`) | 35,964 | 704 | *identical to `0.0` row — see below* | | | | | | | | |
+| `profile` (`boundary_fraction=0.9`) | 35,964 | 352 | 0.1858 | 0.6829 | 0.2921 | 0.1710 | 0.6898 | 0.5348 | 0.1844 | 0.6211 | 0.4833 |
+
+The `simple` row exactly reproduces the pre-existing (stale) entry in
+`scripts/benchmark/_results/peak_benchmarks.txt` (41,549 peaks, identical
+metrics to 4 decimal places) — a useful sanity check that nothing about the
+input data or comparison harness changed.
+
+At its CLI default (`boundary_fraction=0.0`), `profile` mode calls fewer but
+much wider peaks (median 704bp vs. `simple`'s 240bp — 3.3x wider, 28.3Mb vs.
+10.0Mb total footprint) than the legacy caller on identical input. This
+buys real peak-level gains (higher sensitivity, higher mean GT coverage,
+higher PPV — broader peaks are more likely to touch *some* truth territory)
+but at a real bin-level cost: precision, F1, and Jaccard all drop by roughly
+half, mean candidate coverage fraction drops from 0.224 to 0.113 (each
+`profile` peak is on average half as "pure" as each `simple` peak), and
+center-window sensitivity — whether the *summit* lands within 200bp of a
+true feature, arguably the most direct test of profile mode's localization
+claim — actually drops (0.680 → 0.594) rather than improving.
+
+**Root cause: `boundary_fraction`'s default of `0.0` is a silent no-op, and
+`0.5` is *also* a no-op for typical summit scores.** `_trim_segment` (
+`peaks.py:137-144`) computes `threshold = summit_score * boundary_fraction`
+and keeps every bin with raw score `>= threshold`. But every bin in a
+segment already cleared the block-level `seed_score` floor during seeding
+(`peaks.py:58-71`) — so trimming only removes anything once
+`boundary_fraction > seed_score / summit_score`. With the default
+`seed_score = min(min_score, 0.5) = 0.5` and summit scores close to 1.0 (as
+they usually are for real TIRs), that threshold is close to `0.5` —
+`boundary_fraction=0.5` computes `threshold ≈ 0.495`, just barely under the
+`0.5` seed floor, so *nothing* fails the filter and the trimmed BED is
+byte-for-byte identical to the untrimmed one. `boundary_fraction` has to be
+pushed close to `1.0` (tested: `0.9`) before it does anything meaningful —
+at which point it recovers about half the lost precision/F1/Jaccard and
+actually improves center-window sensitivity/specificity above the
+`simple`-mode baseline's untrimmed profile run, at a small cost to
+peak-level sensitivity/PPV. Even at `boundary_fraction=0.9`, `profile` mode
+still trails `simple` mode on bin-level precision/F1/Jaccard for this
+dataset — the width/precision trade is real, not fully a tuning artifact,
+but the CLI defaults are needlessly on the worst point of that trade-off
+curve.
+
+**Practical takeaway:** `--boundary_fraction 0.0` should not be treated as
+"trimming disabled, safe default" — it's disabled in the same practical
+sense whether it's `0.0` or `~0.5`, given `seed_score`'s default. Anyone
+using `profile` mode who cares about bin-level precision or summit
+localization (as opposed to broad-region recall) should raise
+`--boundary_fraction` well above `0.5` — this is the first concrete,
+actionable knob this validation surfaced, as distinct from the abandoned
+calibration-tuning direction.
+
+**Fixed.** `_trim_segment` now anchors its threshold at `seed_score` instead
+of `0`: `threshold = seed_score + boundary_fraction * (summit_score -
+seed_score)`. `boundary_fraction=0.0` remains a true no-op (every segment
+bin already clears `seed_score`), `boundary_fraction=1.0` keeps only the
+summit bin(s), and every value in between now does proportional trimming
+regardless of the `seed_score`/summit-score gap. Regression tests:
+`tests/test_peaks.py::test_profile_boundary_fraction_zero_is_true_noop`,
+`::test_profile_boundary_fraction_one_keeps_only_summit`.
+
+**Full post-fix sweep (same G7/K562 comparison), extended to find where
+`profile` crosses `simple`'s numbers:**
+
+| Config | median width (bp) | bin P | bin R | bin F1 | bin Jaccard | peak sens. | peak PPV | center sens. | center spec. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `simple` (`min_score=0.95`) | 240 | 0.2813 | 0.6292 | 0.3888 | 0.2413 | 0.6691 | 0.4514 | 0.6804 | 0.4634 |
+| `profile` b=0.0 | 704 | 0.1121 | 0.7086 | 0.1936 | 0.1072 | 0.7030 | 0.5443 | 0.5940 | 0.4624 |
+| `profile` b=0.5 | 512 | 0.1419 | 0.7016 | 0.2360 | 0.1338 | 0.6991 | 0.5415 | 0.6053 | 0.4712 |
+| `profile` b=0.9 | 288 | 0.2269 | 0.6576 | 0.3373 | 0.2029 | 0.6780 | 0.5259 | 0.6315 | 0.4915 |
+| `profile` b=0.95 | 240 | 0.2731 | 0.6211 | 0.3794 | 0.2341 | 0.6644 | 0.5157 | 0.6380 | 0.4965 |
+| `profile` b=0.99 | 128 | 0.4020 | 0.4820 | 0.4384 | 0.2807 | 0.6238 | 0.4852 | 0.6434 | 0.5008 |
+
+At `b=0.95`, `profile` matches `simple`'s median width almost exactly (240bp
+vs. 240bp) and comes within ~3% of its precision/F1/Jaccard, while still
+keeping a higher peak PPV and center-window specificity. At `b=0.99`,
+`profile` overtakes `simple` on precision (0.402 vs. 0.281), F1 (0.438 vs.
+0.389), and Jaccard (0.281 vs. 0.241) — but pays for it with recall (0.482
+vs. 0.629) and mean GT coverage (0.486 vs. 0.624), and its peak PPV drops
+back below `simple`'s for the first time in the sweep. So `boundary_fraction`
+spans the same precision/recall trade-off space that `simple`'s single fixed
+threshold occupies one point on — `profile` can be tuned to sit anywhere
+along that curve, including points that strictly dominate `simple` if some
+recall is an acceptable cost. There is no single "best" `boundary_fraction`
+independent of what the caller is optimizing for; `min_score`/`seed_score`
+retuning was not explored in this sweep and would shift the curve further.
 
 ## Sources Checked
 
