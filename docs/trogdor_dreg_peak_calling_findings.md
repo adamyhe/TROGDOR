@@ -246,17 +246,48 @@ Practical takeaways:
   not a substitute for validating the final call set against independent
   ground truth (`trogdor fdr` against ENCODE cCREs, dREG, or groHMM calls).
 
-See `docs/peak_calling_handoff.md` for the next-step directions this
-motivates. Top candidate: a richer multi-feature split/merge/null-comparison
-decision along the lines of dREG's random forest (valley depth, width,
-local candidate density, coverage support — not `smoothed_summit` score
-alone). Informative-site pre-filtering at candidate-seeding time was
-considered and demoted: `scripts/benchmark/infp_filter.py`'s prior
-application (masking a dense `prob.bw` before the legacy external-truth
-`trogdor fdr`) flattened the null to zero without fixing anything that was
-actually broken, implying the model's higher-scoring output is already
-concentrated on genuinely covered positions — coverage isn't the axis
-separating real summits from other candidate regions here.
+## Null-Log Diagnostic Confirms the Candidate Null Is Self-Referential
+(2026-07-17)
+
+To test *why* `--null_scope candidate`'s FDR curve is a near step-function
+(previous section), `--calibration_null_log` was added to log every null
+draw's position and score, then joined against the raw peaks' summit
+positions to measure distance-to-nearest-real-summit. Same runs as above
+(`min_score=0.95`, `seed_score=0.5`, `null_scope=candidate`,
+`calibration_stat=smoothed_summit`, `n_shuffle=20`):
+
+| | median dist. to nearest real summit | frac. ≤100bp |
+| --- | --- | --- |
+| null draws that clear the FDR=0.05 threshold (G7 / GM12878) | 28bp / 25bp | 99.0% / 99.5% |
+| background nulls (5x random sample of all draws) | 2,494bp / 1,246bp | 9.2% / 10.5% |
+| real peaks' own nearest-neighbor spacing (for scale) | 4,112bp / 2,688bp | 0.0% / 0.0% |
+
+Every null draw that survives the FDR filter is sitting within about one
+output bin of an actual real summit — not "near" it in a loose sense, close
+enough that it is effectively the same feature. This rules out the
+"comparably-confident independent local maxima" framing from the previous
+section's takeaways. The real mechanism: `--null_scope candidate`'s allowed
+placement region is the union of all `>= seed_score` blocks on the
+chromosome, and because background essentially never clears `seed_score`
+(only ~5% of the genome does, concentrated at real spikes — see the logit
+histograms above), that region isn't a broad gray zone with real peaks
+scattered inside it. It's a scattered archipelago of tiny islands, each
+*is* a real peak's own immediate footprint, with no unclaimed non-peak
+territory between them. Shuffling a summit-sized window within that space
+cannot land anywhere except on or immediately beside some real peak (often
+the one it was drawn from) — there is no other kind of territory to draw
+from. The null is not failing to discriminate a real peak from a genuine
+alternative; under this construction it isn't an independent negative
+control at all.
+
+This changes the priority order in `docs/peak_calling_handoff.md`: a richer
+multi-feature ranking (dREG's random-forest role) assumed the null
+candidates were genuine, independent alternatives that a scalar score just
+couldn't rank — this diagnostic says that assumption doesn't hold, so fixing
+null *construction* (excluding a peak's own footprint, plus a margin, from
+serving as its own null territory) now comes first. Informative-site
+pre-filtering remains demoted for the separate reason given in the previous
+section (coverage isn't the axis of ambiguity either way).
 
 ## Sources Checked
 

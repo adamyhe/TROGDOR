@@ -242,6 +242,14 @@ def cli():
         help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
     )
     parser_pipeline.add_argument(
+        "--null_exclusion_margin",
+        type=int,
+        default=None,
+        help="--null_scope candidate only: exclude each called peak (plus this many bp on "
+        "each side) from the null placement region, so null draws can't land on/beside a "
+        "real peak's own footprint (default: None, disabled — preserves prior behavior).",
+    )
+    parser_pipeline.add_argument(
         "--n_shuffle",
         type=int,
         default=20,
@@ -522,6 +530,14 @@ def cli():
         choices=["candidate", "genome"],
         default="candidate",
         help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
+    )
+    parser_peaks.add_argument(
+        "--null_exclusion_margin",
+        type=int,
+        default=None,
+        help="--null_scope candidate only: exclude each called peak (plus this many bp on "
+        "each side) from the null placement region, so null draws can't land on/beside a "
+        "real peak's own footprint (default: None, disabled — preserves prior behavior).",
     )
     parser_peaks.add_argument(
         "--n_shuffle",
