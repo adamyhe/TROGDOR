@@ -61,6 +61,100 @@ def merge_intervals_df(intervals_df, chroms=None):
     return pd.DataFrame(rows, columns=["chrom", "start", "end"])
 
 
+def _remerge_sorted_intervals(starts, ends):
+    """Merge possibly-overlapping interval arrays into disjoint, ascending
+    ``(starts, ends)`` int64 arrays. Used after margin expansion, which can
+    make previously-separate intervals overlap or touch."""
+    if len(starts) == 0:
+        return starts, ends
+    order = np.argsort(starts, kind="stable")
+    starts = starts[order]
+    ends = ends[order]
+    merged_starts = [int(starts[0])]
+    merged_ends = [int(ends[0])]
+    for s, e in zip(starts[1:], ends[1:]):
+        s, e = int(s), int(e)
+        if s <= merged_ends[-1]:
+            merged_ends[-1] = max(merged_ends[-1], e)
+        else:
+            merged_starts.append(s)
+            merged_ends.append(e)
+    return (
+        np.array(merged_starts, dtype=np.int64),
+        np.array(merged_ends, dtype=np.int64),
+    )
+
+
+def subtract_intervals_df(allowed_df, exclude_df, margin=0, chroms=None):
+    """Remove ``exclude_df`` intervals (each expanded by ``margin`` bp on
+    both sides) from ``allowed_df``, per chromosome.
+
+    Used to keep null placement (e.g. for ``--null_scope candidate``) from
+    landing on or immediately beside a real peak's own footprint — see
+    ``docs/trogdor_dreg_peak_calling_findings.md``'s "Null-Log Diagnostic"
+    section for why an unmodified candidate footprint is nearly all real
+    peak territory with no independent "elsewhere" to draw from.
+
+    Parameters
+    ----------
+    allowed_df, exclude_df : pd.DataFrame
+        Columns ``chrom``, ``start``, ``end``.
+    margin : int
+        Symmetric bp expansion applied to each ``exclude_df`` interval
+        before subtracting. ``0`` excludes only the exact footprint.
+    chroms : list of str or None
+        Chromosomes to process; defaults to the union of both inputs'
+        chromosomes.
+
+    Returns
+    -------
+    pd.DataFrame
+        Remaining allowed intervals, columns ``chrom``, ``start``, ``end``.
+    """
+    if margin < 0:
+        raise ValueError("margin must be >= 0.")
+    if chroms is None:
+        chroms = sorted(
+            set(allowed_df["chrom"].unique()) | set(exclude_df["chrom"].unique())
+        )
+
+    allowed = merge_intervals_df(allowed_df, chroms)
+    exclude = merge_intervals_df(exclude_df, chroms)
+
+    rows = []
+    for chrom in chroms:
+        a = allowed[allowed["chrom"] == chrom]
+        if len(a) == 0:
+            continue
+        a_starts = a["start"].to_numpy(dtype=np.int64)
+        a_ends = a["end"].to_numpy(dtype=np.int64)
+
+        e = exclude[exclude["chrom"] == chrom]
+        if len(e) == 0:
+            rows.extend((chrom, int(s), int(en)) for s, en in zip(a_starts, a_ends))
+            continue
+
+        e_starts = np.maximum(0, e["start"].to_numpy(dtype=np.int64) - margin)
+        e_ends = e["end"].to_numpy(dtype=np.int64) + margin
+        e_starts, e_ends = _remerge_sorted_intervals(e_starts, e_ends)
+
+        j = 0
+        for a_start, a_end in zip(a_starts.tolist(), a_ends.tolist()):
+            cur = a_start
+            while j < len(e_ends) and e_ends[j] <= cur:
+                j += 1
+            k = j
+            while k < len(e_starts) and e_starts[k] < a_end and cur < a_end:
+                if e_starts[k] > cur:
+                    rows.append((chrom, cur, min(int(e_starts[k]), a_end)))
+                cur = max(cur, int(e_ends[k]))
+                k += 1
+            if cur < a_end:
+                rows.append((chrom, cur, a_end))
+
+    return pd.DataFrame(rows, columns=["chrom", "start", "end"])
+
+
 def shuffle_peaks_within_intervals(peaks_df, allowed_df, chroms, rng):
     """Shuffle peaks so each peak remains fully contained in allowed intervals.
 

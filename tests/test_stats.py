@@ -28,6 +28,7 @@ from chiaroscuro.stats import (
     score_peaks_from_array,
     select_fdr_threshold,
     shuffle_peaks_within_intervals,
+    subtract_intervals_df,
 )
 from chiaroscuro.calibration import (
     null_log_records,
@@ -271,3 +272,85 @@ def test_write_null_log_round_trips(tmp_path):
     assert len(table) == 2
     assert table.iloc[0]["chrom"] == "chr1"
     assert table.iloc[1]["score"] == pytest.approx(0.4)
+
+
+def _bed(rows):
+    return pd.DataFrame(rows, columns=["chrom", "start", "end"])
+
+
+def test_subtract_intervals_df_no_overlap_is_unchanged():
+    allowed = _bed([("chr1", 0, 10)])
+    exclude = _bed([("chr1", 50, 60)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert list(zip(out["chrom"], out["start"], out["end"])) == [("chr1", 0, 10)]
+
+
+def test_subtract_intervals_df_full_swallow_removes_interval():
+    allowed = _bed([("chr1", 10, 20)])
+    exclude = _bed([("chr1", 0, 100)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert len(out) == 0
+
+
+def test_subtract_intervals_df_splits_middle_overlap():
+    allowed = _bed([("chr1", 0, 100)])
+    exclude = _bed([("chr1", 40, 60)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert list(zip(out["start"], out["end"])) == [(0, 40), (60, 100)]
+
+
+def test_subtract_intervals_df_truncates_partial_overlap():
+    allowed = _bed([("chr1", 0, 100)])
+    exclude = _bed([("chr1", 80, 150)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert list(zip(out["start"], out["end"])) == [(0, 80)]
+
+
+def test_subtract_intervals_df_handles_gap_spanning_exclude():
+    allowed = _bed([("chr1", 0, 10), ("chr1", 20, 30)])
+    exclude = _bed([("chr1", 5, 25)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert list(zip(out["start"], out["end"])) == [(0, 5), (25, 30)]
+
+
+def test_subtract_intervals_df_margin_expands_exclusion():
+    allowed = _bed([("chr1", 0, 100)])
+    exclude = _bed([("chr1", 40, 60)])
+
+    out = subtract_intervals_df(allowed, exclude, margin=10)
+
+    assert list(zip(out["start"], out["end"])) == [(0, 30), (70, 100)]
+
+
+def test_subtract_intervals_df_margin_merges_adjacent_excludes():
+    allowed = _bed([("chr1", 0, 100)])
+    exclude = _bed([("chr1", 20, 30), ("chr1", 40, 50)])
+
+    # margin=6 expands to [14,36) and [34,56), which now overlap and merge
+    out = subtract_intervals_df(allowed, exclude, margin=6)
+
+    assert list(zip(out["start"], out["end"])) == [(0, 14), (56, 100)]
+
+
+def test_subtract_intervals_df_ignores_other_chromosomes():
+    allowed = _bed([("chr1", 0, 100)])
+    exclude = _bed([("chr2", 0, 100)])
+
+    out = subtract_intervals_df(allowed, exclude)
+
+    assert list(zip(out["chrom"], out["start"], out["end"])) == [("chr1", 0, 100)]
+
+
+def test_subtract_intervals_df_rejects_negative_margin():
+    with pytest.raises(ValueError, match="margin"):
+        subtract_intervals_df(_bed([("chr1", 0, 10)]), _bed([]), margin=-1)

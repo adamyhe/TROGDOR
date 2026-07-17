@@ -160,47 +160,49 @@ below are motivated by that finding, not by the original geometric concerns.
 
 ## Next Steps (Post-Calibration-Experiment)
 
-1. **A richer, multi-feature split/merge and/or null-comparison decision**
-   (promoted to top priority — see the informative-sites finding below for
-   why), borrowing the role dREG's random forest plays rather than deciding
-   on `smoothed_summit` score alone. Candidate features: valley depth,
-   distance between adjacent maxima, peak width, local density of other
-   candidates nearby, and raw plus/minus coverage support. This is real
-   work (feature engineering plus some kind of classifier or multi-feature
-   scoring rule, not just a CLI flag), but the evidence below points at it
-   as the actual axis of the problem: the candidate pool is not
-   contaminated by background, it's genuinely full of comparably-confident
-   real local maxima, and a single scalar score can't rank among them.
+1. **Fix candidate-null placement to exclude self/near territory — new top
+   priority.** `--calibration_null_log` plus a distance-to-nearest-real-summit
+   join (see `docs/trogdor_dreg_peak_calling_findings.md`'s "Null-Log
+   Diagnostic" section) showed that 99%+ of null draws that clear the FDR=0.05
+   threshold sit within ~1 output bin (25-28bp) of an actual real summit —
+   not "a comparably strong independent candidate," effectively the same
+   feature. `--null_scope candidate`'s allowed placement region (the union of
+   all `>= seed_score` blocks) is a scattered archipelago of tiny islands,
+   each *is* a real peak's own footprint, with no unclaimed non-peak
+   territory between them — so a shuffled draw can't land anywhere except on
+   or beside some real peak, often the one it was drawn from. This needs a
+   real fix at the null-construction level, not a scoring-scheme tweak:
+   e.g. a `shuffle_peaks_within_intervals` variant (or a new `null_scope`)
+   that subtracts a margin around every real peak's own footprint from the
+   allowed region before placing null draws, so a draw represents a genuine
+   "elsewhere" rather than a few bp from thyself. Needs scoping: how wide a
+   margin, whether margin should scale with peak width or smoothing window,
+   and what happens when a chromosome's candidate footprint is dominated by
+   peaks (little "elsewhere" left at all).
 
-2. **Informative-site pre-filtering at candidate-seeding time — demoted,
-   likely low-value.** The idea was to restrict candidate seeding and null
-   placement to bins with real read support (dREG's heuristic: >3 reads in
-   a 100bp window on either strand, or >1 read in a 1kbp window on both
-   strands), on the theory that some fraction of the `>= seed_score` pool
-   is model noise in low/no-coverage regions.
+2. **A richer, multi-feature split/merge and/or null-comparison decision —
+   demoted, revisit only after #1.** Borrowing the role dREG's random
+   forest plays (valley depth, distance between maxima, width, local
+   candidate density, coverage support) assumed the null candidates were
+   genuine independent alternatives that a scalar score just couldn't rank.
+   The null-log diagnostic says that assumption doesn't hold — the null
+   isn't independent in the first place under the current construction, so
+   there's nothing yet to usefully rank against. Worth returning to once #1
+   is fixed and null draws represent genuine alternatives.
 
-   *Prior art rules this out.* `scripts/benchmark/infp_filter.py` already
-   ports this exact dREG heuristic and was previously tried in the legacy
-   pipeline: mask a dense `prob.bw`, then run the *external-truth* `trogdor
-   fdr` (genome-wide uniform null, `--stat max`/`mean`, groHMM/SCREEN as
-   truth) against the masked track (see `scripts/benchmark/_results/fdr.txt`,
-   output `GM12878.trogdor.infp.groHMM.fdr.pdf`). The observed effect was
-   that masking flattened the null distribution to a spike at 0 — but that
-   wasn't fixing a real problem: the null was already well-separated from
-   real *without* the mask (see `GM12878.trogdor.groHMM.fdr.png`). That
-   means essentially none of the model's higher-scoring output sits on
-   genuinely uninformative (no-coverage) positions in the first place — the
-   model isn't confidently wrong about background. That's a property of the
-   model's own calibration, not of the genome-wide-null pipeline stage it
-   was tested in, so it should transfer: the `>= seed_score` candidate pool
-   used by `--null_scope candidate` is almost certainly *also* already
-   concentrated on covered positions. Filtering it by informative sites
-   would likely just re-confirm that without shrinking the pool — coverage
-   isn't the axis separating "real summit" from "other candidate region"
-   here; both are covered. Not worth implementing unless #1 stalls and this
-   gets revisited with direct evidence from the new pipeline.
+3. **Informative-site pre-filtering at candidate-seeding time — still
+   demoted, likely low-value**, for the separate reason already established:
+   the prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
+   `prob.bw` before the legacy external-truth `trogdor fdr`; see
+   `scripts/benchmark/_results/fdr.txt`, output
+   `GM12878.trogdor.infp.groHMM.fdr.pdf`) flattened the null to zero without
+   fixing anything that was actually broken (the null there was already
+   well-separated from real without the mask — see
+   `GM12878.trogdor.groHMM.fdr.png`). That means the model's higher-scoring
+   output is already concentrated on genuinely covered positions — coverage
+   isn't the axis of ambiguity, self-referential null geometry is (#1).
 
-3. **Centroid reporting + two-pass sparse-then-dense scoring** — lower
+4. **Centroid reporting + two-pass sparse-then-dense scoring** — lower
    priority. These are mostly about output richness (probability-weighted
    centroid alongside the summit) and summit-localization precision
    (dREG scores informative sites sparsely first, then densifies inside

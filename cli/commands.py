@@ -39,6 +39,7 @@ from chiaroscuro.stats import (
     select_fdr_threshold,
     shuffle_peaks,
     shuffle_peaks_within_intervals,
+    subtract_intervals_df,
 )
 from chiaroscuro.utils import load_model
 
@@ -269,8 +270,24 @@ def _validate_calibration_args(args):
         raise ValueError("--threshold_grid must be quantile, linear, logit, or unique.")
     if getattr(args, "calibration_plot_scale", "logit") not in {"logit", "score"}:
         raise ValueError("--calibration_plot_scale must be logit or score.")
+    null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
+    if null_exclusion_margin is not None and null_exclusion_margin < 0:
+        raise ValueError("--null_exclusion_margin must be >= 0.")
     if getattr(args, "raw_output", None) == args.output:
         raise ValueError("--raw_output must differ from --output.")
+
+
+def _exclude_peaks_from_allowed(allowed_df, chrom_peaks, chrom, margin):
+    """Subtract called peaks (± margin) from a candidate-null allowed region.
+
+    No-op when ``margin`` is ``None`` (the default), preserving prior
+    behavior where candidate-null placement could land on real peaks'
+    own footprint.
+    """
+    if margin is None:
+        return allowed_df
+    exclude_df = records_to_bed3(chrom_peaks)
+    return subtract_intervals_df(allowed_df, exclude_df, margin=margin, chroms=[chrom])
 
 
 def _default_raw_peak_output(output):
@@ -510,6 +527,12 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                     (s, e, v) for s, e, v in intervals if v >= candidate_threshold
                 ]
                 allowed_df = candidate_intervals_to_bed3(chrom, candidate_ivals)
+                allowed_df = _exclude_peaks_from_allowed(
+                    allowed_df,
+                    chrom_peaks,
+                    chrom,
+                    getattr(args, "null_exclusion_margin", None),
+                )
             else:
                 allowed_df = pd.DataFrame(
                     [(chrom, 0, int(chrom_sizes[chrom]))],
@@ -854,6 +877,12 @@ def cmd_pipeline(args):
 
                 if args.null_scope == "candidate":
                     allowed_df = candidate_intervals_to_bed3(chrom, intervals)
+                    allowed_df = _exclude_peaks_from_allowed(
+                        allowed_df,
+                        chrom_peaks,
+                        chrom,
+                        getattr(args, "null_exclusion_margin", None),
+                    )
                 else:
                     allowed_df = pd.DataFrame(
                         [(chrom, 0, int(chrom_len))],
