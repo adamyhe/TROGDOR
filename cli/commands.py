@@ -250,16 +250,74 @@ def _records_to_summit_bed3(records):
     )
 
 
-def _score_peak_records_from_array(records, scores, chrom, output_stride, stat):
+def _score_centered_windows_from_array(
+    intervals_df, scores, chrom, output_stride, smooth_bins
+):
+    sub = intervals_df[intervals_df["chrom"] == chrom]
+    out = np.full(len(sub), np.nan, dtype=np.float32)
+    left = (smooth_bins - 1) // 2
+    right = smooth_bins // 2
+    scores = np.asarray(scores, dtype=np.float32)
+    for j, (_, row) in enumerate(sub.iterrows()):
+        center_bp = (int(row["start"]) + int(row["end"]) - 1) // 2
+        center_bin = max(0, center_bp // output_stride)
+        lo = max(0, center_bin - left)
+        hi = min(len(scores), center_bin + right + 1)
+        vals = scores[lo:hi]
+        if len(vals) == 0:
+            continue
+        out[j] = np.nan_to_num(vals).mean()
+    return out
+
+
+def _score_centered_windows_from_bigwig(
+    intervals_df, bw, chrom_sizes, chrom, output_stride, smooth_bins
+):
+    sub = intervals_df[intervals_df["chrom"] == chrom]
+    out = np.full(len(sub), np.nan, dtype=np.float32)
+    if chrom not in chrom_sizes:
+        return out
+    chrom_len = chrom_sizes[chrom]
+    half_left = ((smooth_bins - 1) // 2) * output_stride
+    half_right = (smooth_bins // 2 + 1) * output_stride
+    for j, (_, row) in enumerate(sub.iterrows()):
+        center_bp = (int(row["start"]) + int(row["end"]) - 1) // 2
+        center_bin_start = (center_bp // output_stride) * output_stride
+        start = max(0, center_bin_start - half_left)
+        end = min(chrom_len, center_bin_start + half_right)
+        if start >= end:
+            continue
+        vals = np.nan_to_num(np.array(bw.values(chrom, start, end), dtype=np.float32))
+        if len(vals) == 0:
+            continue
+        out[j] = vals.mean()
+    return out
+
+
+def _score_peak_records_from_array(
+    records, scores, chrom, output_stride, stat, smooth_bins=1
+):
     if stat == "summit":
         return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
+    if stat == "smoothed_summit":
+        summit_df = _records_to_summit_bed3(records)
+        return _score_centered_windows_from_array(
+            summit_df, scores, chrom, output_stride, smooth_bins
+        )
     peaks_df = _records_to_bed3(records)
     return score_peaks_from_array(scores, peaks_df, chrom, output_stride, stat)
 
 
-def _score_peak_records_from_bigwig(records, bw, chrom_sizes, chrom, stat):
+def _score_peak_records_from_bigwig(
+    records, bw, chrom_sizes, chrom, stat, output_stride=16, smooth_bins=1
+):
     if stat == "summit":
         return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
+    if stat == "smoothed_summit":
+        summit_df = _records_to_summit_bed3(records)
+        return _score_centered_windows_from_bigwig(
+            summit_df, bw, chrom_sizes, chrom, output_stride, smooth_bins
+        )
     peaks_df = _records_to_bed3(records)
     return score_peaks(bw, peaks_df, chrom_sizes, stat, [chrom])
 
@@ -271,8 +329,12 @@ def _validate_calibration_args(args):
         raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
     if not 0 <= args.calibration_fdr_target <= 1:
         raise ValueError("--calibration_fdr_target must be in [0, 1].")
-    if args.calibration_stat not in {"summit", "max", "mean"}:
-        raise ValueError("--calibration_stat must be summit, max, or mean.")
+    if args.calibration_stat not in {"summit", "smoothed_summit", "max", "mean"}:
+        raise ValueError(
+            "--calibration_stat must be summit, smoothed_summit, max, or mean."
+        )
+    if getattr(args, "calibration_smooth_bins", 1) < 1:
+        raise ValueError("--calibration_smooth_bins must be >= 1.")
     if getattr(args, "threshold_grid", "quantile") not in {
         "quantile",
         "linear",
@@ -661,6 +723,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
     support_handles = _open_support_handles(params)
     rng = np.random.default_rng(args.calibration_seed)
     raw_output = args.raw_output or _default_raw_peak_output(args.output)
+    calibration_smooth_bins = getattr(args, "calibration_smooth_bins", 5)
 
     peak_records = []
     real_score_lists = []
@@ -675,7 +738,13 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
 
             peak_records.extend(chrom_peaks)
             real_scores = _score_peak_records_from_bigwig(
-                chrom_peaks, in_bw, chrom_sizes, chrom, args.calibration_stat
+                chrom_peaks,
+                in_bw,
+                chrom_sizes,
+                chrom,
+                args.calibration_stat,
+                getattr(args, "output_stride", 16),
+                calibration_smooth_bins,
             )
             real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
 
@@ -692,20 +761,34 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
 
             null_source_df = (
                 _records_to_summit_bed3(chrom_peaks)
-                if args.calibration_stat == "summit"
+                if args.calibration_stat in {"summit", "smoothed_summit"}
                 else _records_to_bed3(chrom_peaks)
             )
             for _ in range(args.n_shuffle):
                 null_df = shuffle_peaks_within_intervals(
                     null_source_df, allowed_df, [chrom], rng
                 )
-                null_scores = score_peaks(
-                    in_bw,
-                    null_df,
-                    chrom_sizes,
-                    "max" if args.calibration_stat == "summit" else args.calibration_stat,
-                    [chrom],
-                )
+                if args.calibration_stat == "smoothed_summit":
+                    null_scores = _score_centered_windows_from_bigwig(
+                        null_df,
+                        in_bw,
+                        chrom_sizes,
+                        chrom,
+                        getattr(args, "output_stride", 16),
+                        calibration_smooth_bins,
+                    )
+                else:
+                    null_scores = score_peaks(
+                        in_bw,
+                        null_df,
+                        chrom_sizes,
+                        (
+                            "max"
+                            if args.calibration_stat == "summit"
+                            else args.calibration_stat
+                        ),
+                        [chrom],
+                    )
                 null_score_lists.append(_finite_scores(null_scores))
     finally:
         if support_handles is not None:
@@ -955,6 +1038,7 @@ def cmd_pipeline(args):
         support_handles = _open_support_handles(params)
         rng = np.random.default_rng(args.calibration_seed)
         raw_output = args.raw_output or _default_raw_peak_output(args.output)
+        calibration_smooth_bins = getattr(args, "calibration_smooth_bins", 5)
 
         peak_records = []
         real_score_lists = []
@@ -998,6 +1082,7 @@ def cmd_pipeline(args):
                     chrom,
                     args.output_stride,
                     args.calibration_stat,
+                    calibration_smooth_bins,
                 )
                 real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
 
@@ -1011,7 +1096,7 @@ def cmd_pipeline(args):
 
                 null_source_df = (
                     _records_to_summit_bed3(chrom_peaks)
-                    if args.calibration_stat == "summit"
+                    if args.calibration_stat in {"summit", "smoothed_summit"}
                     else chrom_peaks_df
                 )
                 for _ in range(args.n_shuffle):
@@ -1021,17 +1106,26 @@ def cmd_pipeline(args):
                         [chrom],
                         rng,
                     )
-                    null_scores = score_peaks_from_array(
-                        probs,
-                        null_df,
-                        chrom,
-                        args.output_stride,
-                        (
-                            "max"
-                            if args.calibration_stat == "summit"
-                            else args.calibration_stat
-                        ),
-                    )
+                    if args.calibration_stat == "smoothed_summit":
+                        null_scores = _score_centered_windows_from_array(
+                            null_df,
+                            probs,
+                            chrom,
+                            args.output_stride,
+                            calibration_smooth_bins,
+                        )
+                    else:
+                        null_scores = score_peaks_from_array(
+                            probs,
+                            null_df,
+                            chrom,
+                            args.output_stride,
+                            (
+                                "max"
+                                if args.calibration_stat == "summit"
+                                else args.calibration_stat
+                            ),
+                        )
                     null_score_lists.append(_finite_scores(null_scores))
         finally:
             if support_handles is not None:

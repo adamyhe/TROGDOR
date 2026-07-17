@@ -114,8 +114,9 @@ Proposed staged plan:
      minus-supported, or ambiguous.
 
 5. Empirical calibration:
-   - Score each final candidate by summit score, max score, mean score, width,
-     and optionally raw-signal support.
+   - Score each final candidate by a small summit-centered smoothed score by
+     default; keep raw summit score, max score, mean score, width, and
+     optional raw-signal support available as diagnostics.
    - Build null candidates by shuffling/circular-shifting candidate locations
      within chromosomes or within informative/signal-covered regions.
    - Preserve widths, chromosome assignment, and ideally local mappability or
