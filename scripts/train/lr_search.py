@@ -73,7 +73,8 @@ val_loader = torch.utils.data.DataLoader(
 LRS = np.logspace(-6, -3, num=7)
 
 for lr in LRS:
-    model = TROGDOR(name="TROGDOR", pos_weight=10).cuda()
+    loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0]))
+    model = TROGDOR(name="TROGDOR", loss_fn=loss_fn).cuda()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     run = wandb.init(
@@ -99,7 +100,7 @@ for lr in LRS:
         optimizer.zero_grad()
         with torch.autocast("cuda", dtype=torch.bfloat16):
             logits = model(X)
-            loss = model.loss(logits, y).mean()
+            loss = model._loss_fn(logits, y).mean()
         loss.backward()
         optimizer.step()
         train_loss += loss.item()

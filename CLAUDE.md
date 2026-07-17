@@ -72,7 +72,8 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `compare_peaks.py` / `truth_panel.py` – Peak-level overlap benchmarking against ground-truth BEDs (bin/peak-level precision-recall, centre-window hits); both merge subject intervals before computing coverage fractions to avoid double-counting nested/overlapping calls
 - `frip.py` – Calculates raw and normalized FRIP (Fraction of Reads In Peaks) from stranded bigWigs and a peak BED; normalized FRIP corrects for peak-set size (equivalent to fold-enrichment over uniform expectation)
 - `logit_dist.py` – Logit score distribution diagnostic: reads a probability bigWig, converts to logits, and produces a histogram+KDE / empirical-CDF figure with quantile reference lines
-- `infp_filter.py` – Applies dREG's informative-positions heuristic (read-count thresholds in 100bp/1kbp windows) to mask a probability bigWig down to positions with real coverage support. Currently a standalone post-hoc mask for the legacy simple-threshold + external-truth-FDR workflow, not wired into candidate seeding — see `docs/peak_calling_handoff.md` for why integrating it earlier (at seed time, ahead of `--calibrate`) is an open next step
+- `infp_filter.py` – Applies dREG's informative-positions heuristic (read-count thresholds in 100bp/1kbp windows) to mask a probability bigWig down to positions with real coverage support. Tried against the external-truth `trogdor fdr` workflow and found to add little value: it flattens the null to near-zero without fixing anything that was actually broken (the model already suppresses background on its own) — demoted, not recommended as a next step; see `docs/peak_calling_handoff.md`
+- `fdr_dreg.py` – Empirical FDR estimation analogous to `trogdor fdr`, but for dREG's own scored BED output (centre 1bp per 100bp window) instead of a TROGDOR probability bigWig
 
 ## Architecture
 
@@ -83,8 +84,8 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
-- `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
-- `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
+- `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`
+- `src/chiaroscuro/losses.py` – `focal_tversky_loss`, `tversky_loss`, `focal_loss`; the `TROGDOR` class itself defaults to plain unweighted `BCEWithLogitsLoss` (`loss_fn=None`), but the actual production recipe is `BCEWithLogitsLoss(pos_weight=500)`, applied via `loss_fn=` in `scripts/train/train.py --loss bce` (the default) — this has outperformed all three `chiaroscuro.losses` alternatives in benchmarking so far
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
 - `src/chiaroscuro/predict.py` – `predict_chromosome()` (sliding-window chromosome scoring via DataLoader) and `predict_genome()` (genome-wide generator with background IO prefetch); yields raw `torch.sigmoid` probabilities, no correction applied
 - `src/chiaroscuro/peaks.py` – Peak-calling logic: `call_peaks()` (legacy threshold-and-merge), `call_profile_peaks()` (seed/smooth/valley-split/boundary-trim caller), `resolve_seed_score()` (defaults unset `seed_score` to `min(min_score, 0.5)` so profile mode's local-maxima splitting has more than one bin to work with)
@@ -104,7 +105,7 @@ Input: `(batch, 2, length)` tensor of logistically-normalized stranded nascent R
 - **Decoder** (`context_depth` levels): ConvTranspose1d upsampling back to output resolution with skip connections
 - **Head**: Conv1d → 1 channel logit per output bin
 
-Output: `(batch, 1, length // output_stride)` logits. Loss: BCEWithLogitsLoss. Metrics: AUROC, AUPRC, Dice.
+Output: `(batch, 1, length // output_stride)` logits. Loss: `BCEWithLogitsLoss(pos_weight=500)` (the production recipe — see `src/chiaroscuro/losses.py` above for library-default/alternative losses). Validation metrics logged during training: loss, AUPRC, Dice (`TROGDOR._validate`); AUROC is only computed post-hoc by `scripts/benchmark/benchmark.py`, not during training.
 
 ### Data normalization
 
