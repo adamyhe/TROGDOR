@@ -15,6 +15,18 @@ import torch
 import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
+from chiaroscuro.calibration import (
+    candidate_intervals_to_bed3,
+    finite_scores,
+    records_to_bed3,
+    records_to_summit_bed3,
+    score_centered_windows_from_array,
+    score_centered_windows_from_bigwig,
+    score_peak_records_from_array,
+    score_peak_records_from_bigwig,
+    write_calibration_figure,
+    write_calibration_table,
+)
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
 from chiaroscuro.predict import predict_genome
@@ -26,7 +38,7 @@ from chiaroscuro.stats import (
     shuffle_peaks,
     shuffle_peaks_within_intervals,
 )
-from chiaroscuro.utils import load_model, merge_intervals
+from chiaroscuro.utils import load_model
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
@@ -233,95 +245,6 @@ def _write_peak_file(output, write_func):
     return n_peaks, out_path
 
 
-def _records_to_bed3(records):
-    return pd.DataFrame(
-        [(r["chrom"], int(r["start"]), int(r["end"])) for r in records],
-        columns=["chrom", "start", "end"],
-    )
-
-
-def _records_to_summit_bed3(records):
-    return pd.DataFrame(
-        [
-            (r["chrom"], int(r["summit_start"]), int(r["summit_end"]))
-            for r in records
-        ],
-        columns=["chrom", "start", "end"],
-    )
-
-
-def _score_centered_windows_from_array(
-    intervals_df, scores, chrom, output_stride, smooth_bins
-):
-    sub = intervals_df[intervals_df["chrom"] == chrom]
-    out = np.full(len(sub), np.nan, dtype=np.float32)
-    left = (smooth_bins - 1) // 2
-    right = smooth_bins // 2
-    scores = np.asarray(scores, dtype=np.float32)
-    for j, (_, row) in enumerate(sub.iterrows()):
-        center_bp = (int(row["start"]) + int(row["end"]) - 1) // 2
-        center_bin = max(0, center_bp // output_stride)
-        lo = max(0, center_bin - left)
-        hi = min(len(scores), center_bin + right + 1)
-        vals = scores[lo:hi]
-        if len(vals) == 0:
-            continue
-        out[j] = np.nan_to_num(vals).mean()
-    return out
-
-
-def _score_centered_windows_from_bigwig(
-    intervals_df, bw, chrom_sizes, chrom, output_stride, smooth_bins
-):
-    sub = intervals_df[intervals_df["chrom"] == chrom]
-    out = np.full(len(sub), np.nan, dtype=np.float32)
-    if chrom not in chrom_sizes:
-        return out
-    chrom_len = chrom_sizes[chrom]
-    half_left = ((smooth_bins - 1) // 2) * output_stride
-    half_right = (smooth_bins // 2 + 1) * output_stride
-    for j, (_, row) in enumerate(sub.iterrows()):
-        center_bp = (int(row["start"]) + int(row["end"]) - 1) // 2
-        center_bin_start = (center_bp // output_stride) * output_stride
-        start = max(0, center_bin_start - half_left)
-        end = min(chrom_len, center_bin_start + half_right)
-        if start >= end:
-            continue
-        vals = np.nan_to_num(np.array(bw.values(chrom, start, end), dtype=np.float32))
-        if len(vals) == 0:
-            continue
-        out[j] = vals.mean()
-    return out
-
-
-def _score_peak_records_from_array(
-    records, scores, chrom, output_stride, stat, smooth_bins=1
-):
-    if stat == "summit":
-        return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
-    if stat == "smoothed_summit":
-        summit_df = _records_to_summit_bed3(records)
-        return _score_centered_windows_from_array(
-            summit_df, scores, chrom, output_stride, smooth_bins
-        )
-    peaks_df = _records_to_bed3(records)
-    return score_peaks_from_array(scores, peaks_df, chrom, output_stride, stat)
-
-
-def _score_peak_records_from_bigwig(
-    records, bw, chrom_sizes, chrom, stat, output_stride=16, smooth_bins=1
-):
-    if stat == "summit":
-        return np.asarray([r["summit_score"] for r in records], dtype=np.float32)
-    if stat == "smoothed_summit":
-        summit_df = _records_to_summit_bed3(records)
-        return _score_centered_windows_from_bigwig(
-            summit_df, bw, chrom_sizes, chrom, output_stride, smooth_bins
-        )
-    peaks_df = _records_to_bed3(records)
-    return score_peaks(bw, peaks_df, chrom_sizes, stat, [chrom])
-
-
 def _validate_calibration_args(args):
     if args.n_shuffle <= 0:
         raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
@@ -346,176 +269,6 @@ def _validate_calibration_args(args):
         raise ValueError("--calibration_plot_scale must be logit or score.")
     if getattr(args, "raw_output", None) == args.output:
         raise ValueError("--raw_output must differ from --output.")
-
-
-def _candidate_intervals_to_bed3(chrom, intervals):
-    if not intervals:
-        return pd.DataFrame(columns=["chrom", "start", "end"])
-    rows = [(chrom, int(start), int(end)) for start, end, _ in merge_intervals(intervals)]
-    return pd.DataFrame(rows, columns=["chrom", "start", "end"])
-
-
-def _finite_scores(scores):
-    scores = np.asarray(scores, dtype=np.float32)
-    return scores[~np.isnan(scores)]
-
-
-def _write_calibration_table(path, thresholds, n_real, n_null, fdr, n_total):
-    recall = np.divide(
-        n_real,
-        n_total,
-        out=np.zeros_like(n_real, dtype=float),
-        where=n_total > 0,
-    )
-    table = pd.DataFrame(
-        {
-            "threshold": thresholds,
-            "n_real": n_real.astype(int),
-            "n_null": n_null,
-            "fdr": fdr,
-            "recall_proxy": recall,
-        }
-    )
-    table.to_csv(path, sep="\t", index=False, float_format="%.6g")
-
-
-def _write_calibration_figure(
-    path,
-    real_scores,
-    null_scores,
-    thresholds,
-    n_real,
-    fdr,
-    stat,
-    fdr_target,
-    threshold_at_target,
-    plot_scale="logit",
-):
-    try:
-        import matplotlib
-    except ImportError as exc:
-        raise RuntimeError(
-            "--calibration_figure requires matplotlib; install TROGDOR with "
-            "plotting/dev dependencies or omit this option."
-        ) from exc
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    if plot_scale == "logit":
-        if (
-            min(real_scores.min(), null_scores.min() if len(null_scores) else 1) < 0
-            or max(real_scores.max(), null_scores.max() if len(null_scores) else 0) > 1
-        ):
-            raise ValueError("--calibration_plot_scale logit requires scores in [0, 1].")
-
-        def _plot_x(x):
-            x = np.clip(np.asarray(x, dtype=np.float64), 1e-6, 1 - 1e-6)
-            return np.log(x / (1 - x))
-
-        x_label = f"Logit peak score ({stat})"
-    else:
-        def _plot_x(x):
-            return np.asarray(x, dtype=np.float64)
-
-        x_label = f"Peak score ({stat})"
-
-    real_plot = _plot_x(real_scores)
-    null_plot = _plot_x(null_scores) if len(null_scores) else null_scores
-    thresholds_plot = _plot_x(thresholds)
-    threshold_at_target_plot = (
-        float(_plot_x([threshold_at_target])[0])
-        if not np.isnan(threshold_at_target)
-        else float("nan")
-    )
-
-    recall = np.divide(
-        n_real,
-        len(real_scores),
-        out=np.zeros_like(n_real, dtype=float),
-        where=len(real_scores) > 0,
-    )
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(f"Empirical calibration ({stat})", fontsize=10)
-
-    ax = axes[0]
-    if len(thresholds_plot) > 1 and thresholds_plot[0] != thresholds_plot[-1]:
-        bins = np.linspace(thresholds_plot[0], thresholds_plot[-1], 60)
-    else:
-        center = float(thresholds_plot[0]) if len(thresholds_plot) else 0.0
-        bins = np.linspace(center - 0.5, center + 0.5, 20)
-    ax.hist(
-        real_plot,
-        bins=bins,
-        density=True,
-        alpha=0.6,
-        color="steelblue",
-        label="real",
-    )
-    if len(null_scores) > 0:
-        ax.hist(
-            null_plot,
-            bins=bins,
-            density=True,
-            alpha=0.5,
-            color="salmon",
-            label="null",
-        )
-    if not np.isnan(threshold_at_target):
-        ax.axvline(
-            threshold_at_target_plot,
-            color="black",
-            linestyle="--",
-            linewidth=1,
-            label=f"t={threshold_at_target:.6g}",
-        )
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("Density")
-    ax.set_title("Score distributions")
-    ax.legend(fontsize=8)
-
-    ax = axes[1]
-    ax.plot(thresholds_plot, fdr, color="black", linewidth=1.5, label="FDR")
-    ax.axhline(
-        fdr_target,
-        color="firebrick",
-        linestyle="--",
-        linewidth=0.8,
-        label=f"FDR={fdr_target:.3f}",
-    )
-    if not np.isnan(threshold_at_target):
-        ax.axvline(
-            threshold_at_target_plot,
-            color="grey",
-            linestyle="--",
-            linewidth=0.8,
-            label=f"t={threshold_at_target:.6g}",
-        )
-    ax.set_xlabel(x_label.replace("Peak score", "Score threshold"))
-    ax.set_ylabel("Empirical FDR")
-    ax.set_title("FDR and retained fraction")
-    ax.set_ylim(0, 1.05)
-
-    ax2 = ax.twinx()
-    ax2.plot(
-        thresholds_plot,
-        recall,
-        color="steelblue",
-        linewidth=1.5,
-        label="Retained fraction",
-    )
-    ax2.set_ylabel("Retained fraction", color="steelblue")
-    ax2.tick_params(axis="y", labelcolor="steelblue")
-    ax2.set_ylim(0, 1.05)
-
-    lines1, labels1 = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
-
-    plt.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
 
 
 def _default_raw_peak_output(output):
@@ -737,7 +490,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                 continue
 
             peak_records.extend(chrom_peaks)
-            real_scores = _score_peak_records_from_bigwig(
+            real_scores = score_peak_records_from_bigwig(
                 chrom_peaks,
                 in_bw,
                 chrom_sizes,
@@ -752,7 +505,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                 candidate_ivals = [
                     (s, e, v) for s, e, v in intervals if v >= candidate_threshold
                 ]
-                allowed_df = _candidate_intervals_to_bed3(chrom, candidate_ivals)
+                allowed_df = candidate_intervals_to_bed3(chrom, candidate_ivals)
             else:
                 allowed_df = pd.DataFrame(
                     [(chrom, 0, int(chrom_sizes[chrom]))],
@@ -760,16 +513,16 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                 )
 
             null_source_df = (
-                _records_to_summit_bed3(chrom_peaks)
+                records_to_summit_bed3(chrom_peaks)
                 if args.calibration_stat in {"summit", "smoothed_summit"}
-                else _records_to_bed3(chrom_peaks)
+                else records_to_bed3(chrom_peaks)
             )
             for _ in range(args.n_shuffle):
                 null_df = shuffle_peaks_within_intervals(
                     null_source_df, allowed_df, [chrom], rng
                 )
                 if args.calibration_stat == "smoothed_summit":
-                    null_scores = _score_centered_windows_from_bigwig(
+                    null_scores = score_centered_windows_from_bigwig(
                         null_df,
                         in_bw,
                         chrom_sizes,
@@ -789,7 +542,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                         ),
                         [chrom],
                     )
-                null_score_lists.append(_finite_scores(null_scores))
+                null_score_lists.append(finite_scores(null_scores))
     finally:
         if support_handles is not None:
             support_handles[0].close()
@@ -813,7 +566,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
         if real_score_lists
         else np.array([], dtype=np.float32)
     )
-    real_scores = _finite_scores(real_scores_all)
+    real_scores = finite_scores(real_scores_all)
     null_scores = (
         np.concatenate(null_score_lists)
         if null_score_lists
@@ -835,12 +588,12 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
     )
 
     if args.calibration_curve is not None:
-        _write_calibration_table(
+        write_calibration_table(
             args.calibration_curve, thresholds, n_real, n_null, fdr, len(real_scores)
         )
     calibration_figure = getattr(args, "calibration_figure", None)
     if calibration_figure is not None:
-        _write_calibration_figure(
+        write_calibration_figure(
             calibration_figure,
             real_scores,
             null_scores,
@@ -1075,8 +828,8 @@ def cmd_pipeline(args):
                     continue
 
                 peak_records.extend(chrom_peaks)
-                chrom_peaks_df = _records_to_bed3(chrom_peaks)
-                real_scores = _score_peak_records_from_array(
+                chrom_peaks_df = records_to_bed3(chrom_peaks)
+                real_scores = score_peak_records_from_array(
                     chrom_peaks,
                     probs,
                     chrom,
@@ -1087,7 +840,7 @@ def cmd_pipeline(args):
                 real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
 
                 if args.null_scope == "candidate":
-                    allowed_df = _candidate_intervals_to_bed3(chrom, intervals)
+                    allowed_df = candidate_intervals_to_bed3(chrom, intervals)
                 else:
                     allowed_df = pd.DataFrame(
                         [(chrom, 0, int(chrom_len))],
@@ -1095,7 +848,7 @@ def cmd_pipeline(args):
                     )
 
                 null_source_df = (
-                    _records_to_summit_bed3(chrom_peaks)
+                    records_to_summit_bed3(chrom_peaks)
                     if args.calibration_stat in {"summit", "smoothed_summit"}
                     else chrom_peaks_df
                 )
@@ -1107,7 +860,7 @@ def cmd_pipeline(args):
                         rng,
                     )
                     if args.calibration_stat == "smoothed_summit":
-                        null_scores = _score_centered_windows_from_array(
+                        null_scores = score_centered_windows_from_array(
                             null_df,
                             probs,
                             chrom,
@@ -1126,7 +879,7 @@ def cmd_pipeline(args):
                                 else args.calibration_stat
                             ),
                         )
-                    null_score_lists.append(_finite_scores(null_scores))
+                    null_score_lists.append(finite_scores(null_scores))
         finally:
             if support_handles is not None:
                 support_handles[0].close()
@@ -1150,7 +903,7 @@ def cmd_pipeline(args):
             if real_score_lists
             else np.array([], dtype=np.float32)
         )
-        real_scores = _finite_scores(real_scores_all)
+        real_scores = finite_scores(real_scores_all)
         null_scores = (
             np.concatenate(null_score_lists)
             if null_score_lists
@@ -1174,7 +927,7 @@ def cmd_pipeline(args):
         )
 
         if args.calibration_curve is not None:
-            _write_calibration_table(
+            write_calibration_table(
                 args.calibration_curve,
                 thresholds,
                 n_real,
@@ -1184,7 +937,7 @@ def cmd_pipeline(args):
             )
         calibration_figure = getattr(args, "calibration_figure", None)
         if calibration_figure is not None:
-            _write_calibration_figure(
+            write_calibration_figure(
                 calibration_figure,
                 real_scores,
                 null_scores,
