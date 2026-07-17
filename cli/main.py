@@ -218,9 +218,15 @@ def cli():
     )
     parser_pipeline.add_argument(
         "--calibration_stat",
-        choices=["summit", "max", "mean"],
-        default="summit",
-        help="Per-peak streamed probability statistic used for calibration (default: summit).",
+        choices=["smoothed_summit", "summit", "max", "mean"],
+        default="smoothed_summit",
+        help="Per-peak streamed probability statistic used for calibration (default: smoothed_summit).",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_smooth_bins",
+        type=int,
+        default=5,
+        help="Score bins averaged around each summit when --calibration_stat smoothed_summit is used (default: 5).",
     )
     parser_pipeline.add_argument(
         "--null_scope",
@@ -377,6 +383,12 @@ def cli():
         help="Minimum probability to report a bin as a peak (default: 0.95)",
     )
     parser_peaks.add_argument(
+        "--output_stride",
+        type=int,
+        default=16,
+        help="Score resolution in bp, used by smoothed calibration statistics (default: 16).",
+    )
+    parser_peaks.add_argument(
         "--mode",
         choices=["simple", "refined", "profile"],
         default="simple",
@@ -481,9 +493,15 @@ def cli():
     )
     parser_peaks.add_argument(
         "--calibration_stat",
-        choices=["summit", "max", "mean"],
-        default="summit",
-        help="Per-peak probability statistic used for calibration (default: summit).",
+        choices=["smoothed_summit", "summit", "max", "mean"],
+        default="smoothed_summit",
+        help="Per-peak probability statistic used for calibration (default: smoothed_summit).",
+    )
+    parser_peaks.add_argument(
+        "--calibration_smooth_bins",
+        type=int,
+        default=5,
+        help="Score bins averaged around each summit when --calibration_stat smoothed_summit is used (default: 5).",
     )
     parser_peaks.add_argument(
         "--null_scope",

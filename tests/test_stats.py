@@ -192,6 +192,32 @@ def test_summit_calibration_score_uses_recorded_summit_score():
     assert out[0] == pytest.approx(0.9)
 
 
+def test_smoothed_summit_calibration_averages_local_window():
+    records = [
+        {
+            "chrom": "chr1",
+            "start": 0,
+            "end": 80,
+            "score": 0.9,
+            "summit_start": 32,
+            "summit_end": 48,
+            "summit_score": 0.9,
+        }
+    ]
+    scores = np.array([0.1, 0.2, 0.9, 0.3, 0.4], dtype=np.float32)
+
+    out = _score_peak_records_from_array(
+        records,
+        scores,
+        "chr1",
+        output_stride=16,
+        stat="smoothed_summit",
+        smooth_bins=3,
+    )
+
+    assert out[0] == pytest.approx((0.2 + 0.9 + 0.3) / 3)
+
+
 def test_write_calibration_figure(tmp_path):
     pytest.importorskip("matplotlib")
 

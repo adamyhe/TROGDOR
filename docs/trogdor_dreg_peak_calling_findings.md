@@ -125,18 +125,23 @@ empirical calibration:
    - keep historical four-column BED output for simple mode.
 4. Write raw peaks and calibrated peaks separately from the one-step pipeline.
 5. Calibrate empirically without writing dense score bigWigs:
-   - default statistic: `summit`;
+   - default statistic: `smoothed_summit`;
    - default null scope: thresholded candidate intervals;
    - optional null scope: whole chromosome/genome;
-   - optional interval statistics: `max` or `mean`.
+   - optional statistics: raw `summit`, interval `max`, or interval `mean`.
 6. Select calibrated peaks by empirical FDR threshold, not by a parametric
    p-value.
 
-The default calibration statistic should be `summit`, because TROGDOR's signal
-is spike-like and peak identity is dominated by local maxima. For summit
-calibration, the null should shuffle summit-sized windows, not full peak bodies.
-When users choose `max` or `mean`, the null should instead shuffle full peak
-intervals and score those interval bodies.
+The default calibration statistic should be `smoothed_summit`, because the
+new example tracks show that raw TROGDOR probabilities can be dominated by
+single-bin spikes. A raw `summit` max is useful for diagnostics, but it rewards
+isolated spikes in both real and null placements. `smoothed_summit` instead
+averages a small summit-centered window, so calibrated calls require local
+support around the maximum while still preserving summit-focused peak identity.
+For `summit` and `smoothed_summit` calibration, the null should shuffle
+summit-sized windows, not full peak bodies. When users choose `max` or `mean`,
+the null should instead shuffle full peak intervals and score those interval
+bodies.
 
 ## Candidate-Region Null vs Whole-Genome Null
 
