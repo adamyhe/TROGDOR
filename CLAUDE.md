@@ -27,21 +27,14 @@ The package installs four CLI aliases that all invoke the same entry point: `TRO
 The tool operates in four subcommands:
 
 1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of raw sigmoid probabilities (no multiple-testing correction is applied at this stage)
-2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig. `--mode simple` is the legacy threshold-and-merge caller; `--mode refined` adds `max_gap`/`min_width`/summit columns; `--mode profile` (recommended) seeds candidate blocks at a permissive `--seed_score`, splits/merges local maxima by valley depth, and reports summit columns. `--calibrate` additionally estimates an empirical FDR (shuffle-based, non-parametric — TROGDOR's scores are not assumed to follow a parametric null) and writes separate raw/calibrated BEDs.
-3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix; supports the same `--mode`/`--calibrate` options as `peaks`
-4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for an *externally supplied* candidate peak set (e.g. ENCODE cCREs) against a probability bigWig; shuffles the peak set genome-wide to build a null distribution and reports the score threshold at a target FDR. This is for validating against independent annotations, not for self-calibrating TROGDOR's own peak calls — use `--calibrate` on `peaks`/`pipeline` for that.
+2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig. `--mode` defaults to `profile`: seeds candidate blocks at a permissive `--seed_score` (default `min(min_score, 0.5)`), splits/merges local maxima by valley depth, and trims low-confidence shoulders via `--boundary_fraction` (default `0.95`, interpolated between `seed_score` and the local summit score — `0.0` disables trimming, `1.0` keeps only the summit bin) and reports summit columns. `--mode simple` is the legacy threshold-and-merge caller (no seeding/splitting/trimming); `--mode refined` adds `max_gap`/`min_width`/summit columns without the seed/valley/boundary machinery.
+3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix; supports the same `--mode`/`--seed_score`/`--boundary_fraction` options as `peaks`, with the same `profile` default
+4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for an *externally supplied* candidate peak set (e.g. ENCODE cCREs, dREG, groHMM) against a probability bigWig; shuffles the peak set genome-wide to build a null distribution and reports the score threshold at a target FDR. This is the validation path against independent annotations — there is no self-calibration flag on `peaks`/`pipeline` (a self-referential empirical-FDR calibration effort was tried and abandoned as a structural dead end; see `docs/trogdor_dreg_peak_calling_findings.md`).
 
-Example (individual steps):
+Example (individual steps — `--mode profile` shown explicitly for clarity, but it's the default so it can be omitted):
 ```bash
 trogdor score -M model.torch -p plus.bw -m minus.bw -o scores.bw -d cuda
-trogdor peaks -i scores.bw -o peaks.bed.gz --mode profile --seed_score 0.5 --min_score 0.95
-```
-
-Example (self-calibrated peaks, no model re-run needed if you already have a scored bigWig):
-
-```bash
-trogdor peaks -i scores.bw -o peaks.calibrated.bed.gz --mode profile --seed_score 0.5 --min_score 0.95 \
-  --calibrate --null_scope candidate --calibration_stat smoothed_summit --calibration_fdr_target 0.1
+trogdor peaks -i scores.bw -o peaks.bed.gz --mode profile --min_score 0.95
 ```
 
 Example (FDR estimation against independent ground truth):
@@ -52,7 +45,7 @@ trogdor fdr -b scores.bw -t candidate_peaks.bed.gz --fdr_target 0.05 --output fd
 
 The `fdr` subcommand scores each candidate peak with the summary statistic (`--stat max` or `mean`), then shuffles those peaks within chromosome bounds to build a null distribution. FDR at threshold `t` is estimated as `min(1, N_null(t) / N_real(t))`, averaged over `--n_shuffle` independent shuffles (default 1). The score threshold at the target FDR is printed to stdout.
 
-`--calibrate` (on `peaks`/`pipeline`) computes the same style of empirical FDR, but self-referentially against TROGDOR's own candidate peaks rather than an external BED — see `docs/trogdor_dreg_peak_calling_findings.md` for why this is calibration-sensitive (TROGDOR's score distribution is spiky/saturating, not smoothly graded) and `docs/peak_calling_handoff.md` for open next steps.
+The `profile` mode default and its `--boundary_fraction=0.95` default were chosen from a real benchmark sweep against independent groHMM+DNase truth (not from theory) — see `docs/trogdor_dreg_peak_calling_findings.md`'s "Independent-Ground-Truth Validation Results" and `docs/peak_calling_handoff.md`'s "Next Steps" for the numbers and the width/precision/recall trade-off `boundary_fraction` controls.
 
 Example (full pipeline):
 
@@ -95,8 +88,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
 - `src/chiaroscuro/predict.py` – `predict_chromosome()` (sliding-window chromosome scoring via DataLoader) and `predict_genome()` (genome-wide generator with background IO prefetch); yields raw `torch.sigmoid` probabilities, no correction applied
 - `src/chiaroscuro/peaks.py` – Peak-calling logic: `call_peaks()` (legacy threshold-and-merge), `call_profile_peaks()` (seed/smooth/valley-split/boundary-trim caller), `resolve_seed_score()` (defaults unset `seed_score` to `min(min_score, 0.5)` so profile mode's local-maxima splitting has more than one bin to work with)
-- `src/chiaroscuro/stats.py` – Empirical FDR primitives: `score_peaks()`/`score_peaks_from_array()` (summarise bigWig/array scores over a peak BED), `shuffle_peaks()` (uniform genome-wide null), `shuffle_peaks_within_intervals()` (null constrained to allowed regions, e.g. candidate footprint), `compute_fdr()` (build an FDR curve; `threshold_grid` of `quantile`/`linear`/`logit`/`unique` — `quantile` is default and oversamples the high-score tail, since TROGDOR's scores concentrate there), `select_fdr_threshold()`
-- `src/chiaroscuro/calibration.py` – Shared self-calibration helpers used by both `cmd_peaks --calibrate` and `cmd_pipeline --calibrate`: BED conversion, per-peak scoring (`summit`/`smoothed_summit`/`max`/`mean`), and table/figure writers (`write_calibration_table()`, `write_calibration_figure()`)
+- `src/chiaroscuro/stats.py` – Empirical FDR primitives used by the `fdr` subcommand: `score_peaks()` (summarise bigWig scores over a peak BED), `shuffle_peaks()` (uniform genome-wide null), `compute_fdr()` (build an FDR curve; `threshold_grid` of `quantile`/`linear`/`logit`/`unique` — `quantile` is default and oversamples the high-score tail, since TROGDOR's scores concentrate there), `select_fdr_threshold()`
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 
 ### Model architecture (`TROGDOR`)

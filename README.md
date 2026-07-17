@@ -72,77 +72,56 @@ want to keep the score track.
 The pipeline can also be run as two separate steps — useful if you want to call peaks at multiple thresholds without re-scoring:
 
 ```bash
-# Step 1: score (GPU recommended)
-trogdor score -p plus.bw -m minus.bw -o mysample.prob0.9.bw -s 0.9
+# Step 1: score (GPU recommended). Store down to 0.5 so the default profile
+# caller's seed_score (min(min_score, 0.5)) always has bins to seed from —
+# see the seed_score/storage-threshold note below.
+trogdor score -p plus.bw -m minus.bw -o mysample.prob0.5.bw -s 0.5
 
 # Step 2: call peaks at different thresholds (CPU, fast)
-trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.9.bed.gz -s 0.9
-trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.95.bed.gz -s 0.95
-trogdor peaks -i mysample.prob0.9.bw -o mysample.peaks0.99.bed.gz -s 0.99
+trogdor peaks -i mysample.prob0.5.bw -o mysample.peaks0.9.bed.gz -s 0.9
+trogdor peaks -i mysample.prob0.5.bw -o mysample.peaks0.95.bed.gz -s 0.95
+trogdor peaks -i mysample.prob0.5.bw -o mysample.peaks0.99.bed.gz -s 0.99
 ```
 
-The default `peaks` command preserves the original threshold-and-merge caller.
-An experimental refined caller is available for benchmarking post-processing
-choices without changing the model or default behavior:
+By default, `peaks` and `pipeline` use the profile caller (`--mode profile`),
+a non-parametric caller that seeds candidate blocks at `--seed_score`
+(default `min(min_score, 0.5)`), splits nearby local summits only when the
+intervening valley is sufficiently deep, trims low-confidence shoulders via
+`--boundary_fraction` (default `0.95`, interpolated between `seed_score` and
+the local summit score — `0.0` disables trimming, `1.0` keeps only the
+summit bin), and reports summit columns alongside the merged peak:
+`chrom`, `start`, `end`, `score`, `summit_start`, `summit_end`,
+`summit_score`.
+
+```bash
+trogdor peaks -i mysample.prob.bw -o mysample.peaks.bed.gz --min_score 0.95
+```
+
+`--max_gap`, `--smooth_bins`, and `--valley_fraction` are additional tuning
+knobs. The `--boundary_fraction=0.95` default was chosen from a benchmark
+sweep against independent ground truth, not from theory — see
+`docs/trogdor_dreg_peak_calling_findings.md` for the numbers and the
+width/precision/recall trade-off it controls. If `score` and `peaks` are run
+separately, the score bigWig must have been written with a storage threshold
+no higher than the intended `--seed_score`. The one-step `pipeline` command
+avoids writing an intermediate score bigWig by default, so profile calling
+can use a lower `--seed_score` without materializing that score track unless
+`--save_bigwig` is explicitly set.
+
+The original threshold-and-merge caller is still available via
+`--mode simple` (a bin passes if its score clears `--min_score`, and
+adjacent passing bins merge — no seeding, splitting, or trimming).
+`--mode refined` adds `--max_gap`/`--min_width` merging and summit columns
+without the seed/valley/boundary machinery:
 
 ```bash
 trogdor peaks -i mysample.prob.bw -o mysample.refined.bed \
   --mode refined --min_score 0.95 --max_gap 32 --min_width 32
 ```
 
-Refined output includes BED columns for the merged peak and the max-score
-summit bin: `chrom`, `start`, `end`, `score`, `summit_start`, `summit_end`,
-`summit_score`. `--min_support_signal` can optionally require raw plus/minus
-coverage support when `--support_plus_bigwig` and `--support_minus_bigwig` are
-provided.
-
-A profile-aware caller is also available for local peak-shape refinement:
-
-```bash
-trogdor peaks -i mysample.prob.bw -o mysample.profile.bed \
-  --mode profile --min_score 0.95 --seed_score 0.5
-```
-
-The profile caller uses TROGDOR scores non-parametrically: it seeds candidate
-blocks at `--seed_score`, splits nearby local summits only when the intervening
-valley is sufficiently deep, trims optional low-scoring shoulders, and reports
-summit columns. `--max_gap`, `--smooth_bins`, `--valley_fraction`, and
-`--boundary_fraction` are tuning knobs for held-out benchmarking rather than
-recommended constants. If `score` and `peaks` are run separately, the score
-bigWig must have been written with a storage threshold no higher than the
-intended `--seed_score`. The one-step `pipeline` command avoids writing an
-intermediate score bigWig by default, so profile calling can use a lower
-`--seed_score` without materializing that score track unless `--save_bigwig` is
-explicitly set.
-
-The one-step pipeline can also calibrate the caller empirically from streamed
-per-chromosome probabilities, without writing a dense probability bigWig:
-
-```bash
-trogdor pipeline -p plus.bw -m minus.bw -o mysample.profile.fdr05.bed.gz \
-  --peak_mode profile --min_score 0.95 --seed_score 0.5 \
-  --calibrate --calibration_fdr_target 0.05 \
-  --raw_output mysample.profile.raw.bed.gz \
-  --calibration_curve mysample.profile.fdr.tsv \
-  --calibration_figure mysample.profile.fdr.png
-```
-
-With `--calibrate`, TROGDOR first calls candidate peaks from the streamed
-probabilities, then builds a non-parametric null within the thresholded
-candidate intervals by default (`--null_scope candidate`). The raw BED is
-written to `--raw_output` (or a `.raw` sibling of `--output` when omitted), and
-the final `--output` BED contains peaks whose summit score reaches the empirical
-FDR target. The default `--calibration_stat summit` shuffles summit-sized
-windows for the null; `--calibration_stat max` or `mean` instead shuffles full
-peak intervals and scores the interval body. Use `--null_scope genome` to
-shuffle within whole chromosomes instead. `--calibrate` currently uses the
-streaming pipeline path and should be run without `--save_bigwig`.
-Empirical FDR is evaluated on a tail-enriched `--threshold_grid quantile` grid
-by default, which avoids skipping the saturated high-score tail of TROGDOR
-probabilities. `--calibration_figure` writes a PNG/PDF/SVG-style figure,
-depending on the file extension accepted by matplotlib, showing real/null score
-distributions and the empirical FDR curve on a logit x-axis by default
-(`--calibration_plot_scale logit`).
+`--min_support_signal` can optionally require raw plus/minus coverage
+support when `--support_plus_bigwig` and `--support_minus_bigwig` are
+provided (supported with `--mode refined`/`profile`, not `simple`).
 
 ### Empirical FDR estimation and `min_score` calibration
 
@@ -163,7 +142,7 @@ trogdor fdr -b mysample.prob.bw -t candidate_peaks.bed.gz --fdr_target 0.05
 | `-t / --peaks`     | —          | Candidate peak BED (required)                               |
 | `--stat`           | `max`      | Summary statistic per peak (`max` or `mean`)                |
 | `--n_shuffle`      | `1`        | Independent genome shuffles to average the null over        |
-| `--fdr_target`     | `0.05`     | Target FDR for reporting the score threshold                |
+| `--fdr_target`     | off        | Target FDR for reporting the score threshold; omit to skip  |
 | `--threshold_grid` | `quantile` | Threshold grid (`quantile`, `linear`, `logit`, or `unique`) |
 | `--output`         | off        | Write TSV table of threshold/FDR/N\_real/N\_null to path    |
 | `--figure`         | off        | Save FDR-vs-threshold plot to path                          |

@@ -261,6 +261,21 @@ below are motivated by that finding, not by the original geometric concerns.
     easy-to-reason-about no-op default; only the CLI's product-facing
     default changed.
 
+    **Decision: `--mode` on `trogdor peaks` now also defaults to `profile`**
+    (changed from `simple`), matching `trogdor pipeline`'s `--peak_mode`,
+    which already defaulted to `profile`. That asymmetry meant the two
+    subcommands silently disagreed on out-of-the-box behavior; with this
+    change plus the `boundary_fraction=0.95` default above, an unqualified
+    `trogdor peaks -i scores.bw -o peaks.bed.gz --min_score 0.95` now runs
+    the validated, tuned profile caller rather than the legacy
+    threshold-and-merge one. Two `getattr(args, "mode", "simple")` fallbacks
+    in `cli/commands.py` (`_peak_params`, and the `Namespace` `cmd_pipeline`
+    builds to re-invoke `cmd_peaks` when streaming from a fresh model run)
+    had the same stale-default problem `boundary_fraction`'s fallbacks did
+    and were updated to `"profile"` for the same reason — they only matter
+    if `args` is ever missing the attribute, but should still match what the
+    CLI itself defaults to.
+
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the
    prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
