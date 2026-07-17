@@ -286,6 +286,71 @@ def test_cmd_peaks_calibrate_without_null_exclusion_margin_null_overlaps_peaks(t
     assert _null_overlaps_any_peak_margin(null, raw, margin=0)
 
 
+def test_cmd_peaks_calibrate_reports_shortfall_when_margin_exhausts_territory(
+    tmp_path, capsys
+):
+    # No distractor block this time: the two peaks' own footprints are the
+    # entire candidate space, so a margin big enough to swallow both leaves
+    # nowhere to place null draws — the shortfall report should say so.
+    chrom, chrom_len, stride = "chr1", 16000, 16
+    bw_path = tmp_path / "scores.bw"
+    intervals = _dense_intervals(
+        chrom_len,
+        stride,
+        background_score=0.05,
+        bumps=[(2000, 2064, 0.97), (8000, 8064, 0.96)],
+    )
+    _write_bigwig(bw_path, chrom, chrom_len, stride, intervals)
+
+    args = _base_peaks_args(
+        tmp_path / "scores.bw",
+        tmp_path / "peaks.bed.gz",
+        raw_output=str(tmp_path / "peaks.raw.bed.gz"),
+        seed_score=0.5,
+        null_scope="candidate",
+        n_shuffle=20,
+        null_exclusion_margin=200,
+        verbose=True,
+    )
+    cmd_peaks(args)
+
+    out = capsys.readouterr().out
+    assert "Null placement after --null_exclusion_margin=200" in out
+    assert "0/40 draws placed" in out
+    assert "1/1 chromosomes short" in out
+    assert "candidate territory may be exhausted" in out
+
+
+def test_cmd_peaks_calibrate_no_shortfall_report_when_territory_available(
+    tmp_path, capsys
+):
+    chrom, chrom_len, stride = "chr1", 16000, 16
+    bw_path = tmp_path / "scores.bw"
+    intervals = _dense_intervals(
+        chrom_len,
+        stride,
+        background_score=0.05,
+        bumps=_two_peaks_plus_distractor_bumps(stride),
+    )
+    _write_bigwig(bw_path, chrom, chrom_len, stride, intervals)
+
+    args = _base_peaks_args(
+        bw_path,
+        tmp_path / "peaks.bed.gz",
+        raw_output=str(tmp_path / "peaks.raw.bed.gz"),
+        seed_score=0.5,
+        null_scope="candidate",
+        n_shuffle=20,
+        null_exclusion_margin=80,
+        verbose=True,
+    )
+    cmd_peaks(args)
+
+    out = capsys.readouterr().out
+    assert "40/40 draws placed (0/1 chromosomes short)" in out
+    assert "candidate territory may be exhausted" not in out
+
+
 def test_cmd_peaks_calibrate_candidate_null_runs(tmp_path):
     chrom, chrom_len, stride = "chr1", 16000, 16
     bw_path = tmp_path / "scores.bw"
