@@ -157,17 +157,17 @@ trogdor fdr -b mysample.prob.bw -t candidate_peaks.bed.gz --fdr_target 0.05
 
 **Strategy**: each candidate peak is summarised by its max (or mean) bigWig score. A null distribution is built by shuffling peak positions uniformly within chromosome bounds (preserving widths). FDR at threshold *t* is estimated as min(1, N\_null(*t*) / N\_real(*t*)), averaged over `--n_shuffle` independent shuffles. The score threshold at the target FDR is printed to stdout.
 
-| Flag            | Default | Description                                              |
-| --------------- | ------- | -------------------------------------------------------- |
-| `-b / --bigwig` | —       | Probability bigWig (required)                            |
-| `-t / --peaks`  | —       | Candidate peak BED (required)                            |
-| `--stat`        | `max`   | Summary statistic per peak (`max` or `mean`)             |
-| `--n_shuffle`   | `1`     | Independent genome shuffles to average the null over     |
-| `--fdr_target`  | `0.05`  | Target FDR for reporting the score threshold             |
+| Flag               | Default    | Description                                                 |
+| ------------------ | ---------- | ----------------------------------------------------------- |
+| `-b / --bigwig`    | —          | Probability bigWig (required)                               |
+| `-t / --peaks`     | —          | Candidate peak BED (required)                               |
+| `--stat`           | `max`      | Summary statistic per peak (`max` or `mean`)                |
+| `--n_shuffle`      | `1`        | Independent genome shuffles to average the null over        |
+| `--fdr_target`     | `0.05`     | Target FDR for reporting the score threshold                |
 | `--threshold_grid` | `quantile` | Threshold grid (`quantile`, `linear`, `logit`, or `unique`) |
-| `--output`      | off     | Write TSV table of threshold/FDR/N\_real/N\_null to path |
-| `--figure`      | off     | Save FDR-vs-threshold plot to path                       |
-| `--chroms`      | all     | Restrict to specific chromosomes                         |
+| `--output`         | off        | Write TSV table of threshold/FDR/N\_real/N\_null to path    |
+| `--figure`         | off        | Save FDR-vs-threshold plot to path                          |
+| `--chroms`         | all        | Restrict to specific chromosomes                            |
 
 ## Development/Model retraining
 
