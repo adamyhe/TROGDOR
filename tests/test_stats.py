@@ -29,6 +29,10 @@ from chiaroscuro.stats import (
     select_fdr_threshold,
     shuffle_peaks_within_intervals,
 )
+from chiaroscuro.calibration import (
+    score_peak_records_from_array,
+    write_calibration_figure,
+)
 
 
 def _load_commands_module():
@@ -42,8 +46,6 @@ def _load_commands_module():
 _commands = _load_commands_module()
 _call_chrom_peaks = _commands._call_chrom_peaks
 _default_raw_peak_output = _commands._default_raw_peak_output
-_score_peak_records_from_array = _commands._score_peak_records_from_array
-_write_calibration_figure = _commands._write_calibration_figure
 
 
 def test_score_peaks_from_array_uses_output_stride_bins():
@@ -181,7 +183,7 @@ def test_summit_calibration_score_uses_recorded_summit_score():
     ]
     scores = np.array([0.2, 0.9, 0.3], dtype=np.float32)
 
-    out = _score_peak_records_from_array(
+    out = score_peak_records_from_array(
         records,
         scores,
         "chr1",
@@ -206,7 +208,7 @@ def test_smoothed_summit_calibration_averages_local_window():
     ]
     scores = np.array([0.1, 0.2, 0.9, 0.3, 0.4], dtype=np.float32)
 
-    out = _score_peak_records_from_array(
+    out = score_peak_records_from_array(
         records,
         scores,
         "chr1",
@@ -228,7 +230,7 @@ def test_write_calibration_figure(tmp_path):
     n_real = np.array([3, 2, 2], dtype=float)
     fdr = np.array([1.0, 0.25, 0.0], dtype=float)
 
-    _write_calibration_figure(
+    write_calibration_figure(
         path,
         real_scores,
         null_scores,
