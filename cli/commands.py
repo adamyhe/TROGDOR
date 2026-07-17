@@ -15,31 +15,14 @@ import torch
 import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
-from chiaroscuro.calibration import (
-    candidate_intervals_to_bed3,
-    finite_scores,
-    null_log_records,
-    records_to_bed3,
-    records_to_summit_bed3,
-    score_centered_windows_from_array,
-    score_centered_windows_from_bigwig,
-    score_peak_records_from_array,
-    score_peak_records_from_bigwig,
-    write_calibration_figure,
-    write_calibration_table,
-    write_null_log,
-)
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.stats import (
     compute_fdr,
     score_peaks,
-    score_peaks_from_array,
     select_fdr_threshold,
     shuffle_peaks,
-    shuffle_peaks_within_intervals,
-    subtract_intervals_df,
 )
 from chiaroscuro.utils import load_model
 
@@ -248,83 +231,6 @@ def _write_peak_file(output, write_func):
     return n_peaks, out_path
 
 
-def _validate_calibration_args(args):
-    if args.n_shuffle <= 0:
-        raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
-    if args.n_thresholds <= 1:
-        raise ValueError("--n_thresholds must be > 1 when --calibrate is used.")
-    if not 0 <= args.calibration_fdr_target <= 1:
-        raise ValueError("--calibration_fdr_target must be in [0, 1].")
-    if args.calibration_stat not in {"summit", "smoothed_summit", "max", "mean"}:
-        raise ValueError(
-            "--calibration_stat must be summit, smoothed_summit, max, or mean."
-        )
-    if getattr(args, "calibration_smooth_bins", 1) < 1:
-        raise ValueError("--calibration_smooth_bins must be >= 1.")
-    if getattr(args, "threshold_grid", "quantile") not in {
-        "quantile",
-        "linear",
-        "logit",
-        "unique",
-    }:
-        raise ValueError("--threshold_grid must be quantile, linear, logit, or unique.")
-    if getattr(args, "calibration_plot_scale", "logit") not in {"logit", "score"}:
-        raise ValueError("--calibration_plot_scale must be logit or score.")
-    null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
-    if null_exclusion_margin is not None and null_exclusion_margin < 0:
-        raise ValueError("--null_exclusion_margin must be >= 0.")
-    if getattr(args, "raw_output", None) == args.output:
-        raise ValueError("--raw_output must differ from --output.")
-
-
-def _exclude_peaks_from_allowed(allowed_df, chrom_peaks, chrom, margin):
-    """Subtract called peaks (± margin) from a candidate-null allowed region.
-
-    No-op when ``margin`` is ``None`` (the default), preserving prior
-    behavior where candidate-null placement could land on real peaks'
-    own footprint.
-    """
-    if margin is None:
-        return allowed_df
-    exclude_df = records_to_bed3(chrom_peaks)
-    return subtract_intervals_df(allowed_df, exclude_df, margin=margin, chroms=[chrom])
-
-
-def _report_null_placement_shortfall(null_placement_stats, null_exclusion_margin, verbose):
-    """Warn when --null_exclusion_margin leaves too little territory to place
-    the requested number of null draws (chrom_expected = n_peaks * n_shuffle).
-    """
-    if not verbose or null_exclusion_margin is None or not null_placement_stats:
-        return
-    total_expected = sum(exp for _, exp, _ in null_placement_stats)
-    if total_expected == 0:
-        return
-    total_placed = sum(placed for _, _, placed in null_placement_stats)
-    short = [(c, exp, p) for c, exp, p in null_placement_stats if p < exp]
-    print(
-        f"Null placement after --null_exclusion_margin={null_exclusion_margin}: "
-        f"{total_placed:,}/{total_expected:,} draws placed "
-        f"({len(short)}/{len(null_placement_stats)} chromosomes short)"
-    )
-    if short:
-        worst = sorted(short, key=lambda t: t[2] - t[1])[:5]
-        for chrom, exp, placed in worst:
-            print(
-                f"  {chrom}: placed {placed:,}/{exp:,} null draws — candidate "
-                "territory may be exhausted after exclusion; consider a smaller margin"
-            )
-
-
-def _default_raw_peak_output(output):
-    if output.endswith(".bed.gz"):
-        return f"{output[:-len('.bed.gz')]}.raw.bed.gz"
-    if output.endswith(".bed"):
-        return f"{output[:-len('.bed')]}.raw.bed"
-    if output.endswith(".gz"):
-        return f"{output[:-len('.gz')]}.raw.gz"
-    return f"{output}.raw"
-
-
 def cmd_score(args):
     """Run the ``score`` subcommand: genome-wide TIR scoring to a bigWig.
 
@@ -429,12 +335,6 @@ def cmd_peaks(args):
     Output is written as plain text unless ``args.output`` ends with ``".gz"``,
     in which case it is piped through ``bgzip``.
 
-    If ``args.calibrate`` is set, peaks are instead calibrated against an
-    empirical null built by shuffling peaks within the input bigWig, mirroring
-    ``cmd_pipeline``'s streamed calibration but reading scores directly from
-    the bigWig instead of re-running the model. Raw (pre-filter) and
-    calibrated peak BEDs are written separately.
-
     Parameters
     ----------
     args : argparse.Namespace
@@ -449,9 +349,6 @@ def cmd_peaks(args):
         ``verbose`` (bool)
             Whether to print progress messages.
     """
-    if getattr(args, "calibrate", False):
-        _validate_calibration_args(args)
-
     in_bw = pybigtools.open(args.input)
     chrom_sizes = dict(in_bw.chroms())
 
@@ -467,17 +364,9 @@ def cmd_peaks(args):
             if not np.isnan(v)
         ]
         chrom_intervals[chrom] = ivals
+    in_bw.close()
 
     params = _peak_params(args)
-
-    if getattr(args, "calibrate", False):
-        try:
-            _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params)
-        finally:
-            in_bw.close()
-        return
-
-    in_bw.close()
 
     if args.verbose:
         n_pass = sum(
@@ -515,207 +404,6 @@ def cmd_peaks(args):
         print(f"{n_peaks} peaks written to {out_path}")
 
 
-def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
-    candidate_threshold = _candidate_threshold(params)
-    support_handles = _open_support_handles(params)
-    rng = np.random.default_rng(args.calibration_seed)
-    raw_output = args.raw_output or _default_raw_peak_output(args.output)
-    calibration_smooth_bins = getattr(args, "calibration_smooth_bins", 5)
-
-    peak_records = []
-    real_score_lists = []
-    null_score_lists = []
-    null_log_path = getattr(args, "calibration_null_log", None)
-    null_log_rows = [] if null_log_path is not None else None
-    null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
-    null_placement_stats = [] if null_exclusion_margin is not None else None
-
-    try:
-        for chrom in sorted(chrom_sizes):
-            intervals = chrom_intervals[chrom]
-            chrom_peaks = _call_chrom_peaks(chrom, intervals, params, support_handles)
-            if len(chrom_peaks) == 0:
-                continue
-
-            peak_records.extend(chrom_peaks)
-            real_scores = score_peak_records_from_bigwig(
-                chrom_peaks,
-                in_bw,
-                chrom_sizes,
-                chrom,
-                args.calibration_stat,
-                getattr(args, "output_stride", 16),
-                calibration_smooth_bins,
-            )
-            real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
-
-            if args.null_scope == "candidate":
-                candidate_ivals = [
-                    (s, e, v) for s, e, v in intervals if v >= candidate_threshold
-                ]
-                allowed_df = candidate_intervals_to_bed3(chrom, candidate_ivals)
-                allowed_df = _exclude_peaks_from_allowed(
-                    allowed_df,
-                    chrom_peaks,
-                    chrom,
-                    getattr(args, "null_exclusion_margin", None),
-                )
-            else:
-                allowed_df = pd.DataFrame(
-                    [(chrom, 0, int(chrom_sizes[chrom]))],
-                    columns=["chrom", "start", "end"],
-                )
-
-            null_source_df = (
-                records_to_summit_bed3(chrom_peaks)
-                if args.calibration_stat in {"summit", "smoothed_summit"}
-                else records_to_bed3(chrom_peaks)
-            )
-            chrom_placed = 0
-            for _ in range(args.n_shuffle):
-                null_df = shuffle_peaks_within_intervals(
-                    null_source_df, allowed_df, [chrom], rng
-                )
-                chrom_placed += len(null_df)
-                if args.calibration_stat == "smoothed_summit":
-                    null_scores = score_centered_windows_from_bigwig(
-                        null_df,
-                        in_bw,
-                        chrom_sizes,
-                        chrom,
-                        getattr(args, "output_stride", 16),
-                        calibration_smooth_bins,
-                    )
-                else:
-                    null_scores = score_peaks(
-                        in_bw,
-                        null_df,
-                        chrom_sizes,
-                        (
-                            "max"
-                            if args.calibration_stat == "summit"
-                            else args.calibration_stat
-                        ),
-                        [chrom],
-                    )
-                null_score_lists.append(finite_scores(null_scores))
-                if null_log_rows is not None:
-                    null_log_rows.extend(null_log_records(null_df, null_scores))
-            if null_placement_stats is not None:
-                null_placement_stats.append(
-                    (chrom, len(null_source_df) * args.n_shuffle, chrom_placed)
-                )
-    finally:
-        if support_handles is not None:
-            support_handles[0].close()
-            support_handles[1].close()
-
-    _report_null_placement_shortfall(
-        null_placement_stats, null_exclusion_margin, args.verbose
-    )
-
-    if null_log_path is not None:
-        write_null_log(null_log_path, null_log_rows)
-        if args.verbose:
-            print(f"{len(null_log_rows):,} null draws logged to {null_log_path}")
-
-    if len(peak_records) == 0:
-        def _write_empty(out_bed):
-            return 0
-
-        raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_empty)
-        n_peaks, out_path = _write_peak_file(args.output, _write_empty)
-        if args.verbose:
-            print(
-                "No peaks before calibration; wrote empty raw/calibrated "
-                f"BEDs to {raw_out_path} and {out_path}"
-            )
-        return
-
-    real_scores_all = (
-        np.concatenate(real_score_lists)
-        if real_score_lists
-        else np.array([], dtype=np.float32)
-    )
-    real_scores = finite_scores(real_scores_all)
-    null_scores = (
-        np.concatenate(null_score_lists)
-        if null_score_lists
-        else np.array([], dtype=np.float32)
-    )
-
-    if len(real_scores) == 0:
-        raise ValueError("No finite peak scores available for calibration.")
-
-    thresholds, n_real, n_null, fdr = compute_fdr(
-        real_scores,
-        null_scores,
-        args.n_shuffle,
-        args.n_thresholds,
-        getattr(args, "threshold_grid", "quantile"),
-    )
-    threshold_at_target, n_at_target = select_fdr_threshold(
-        thresholds, n_real, fdr, args.calibration_fdr_target
-    )
-
-    if args.calibration_curve is not None:
-        write_calibration_table(
-            args.calibration_curve, thresholds, n_real, n_null, fdr, len(real_scores)
-        )
-    calibration_figure = getattr(args, "calibration_figure", None)
-    if calibration_figure is not None:
-        write_calibration_figure(
-            calibration_figure,
-            real_scores,
-            null_scores,
-            thresholds,
-            n_real,
-            fdr,
-            args.calibration_stat,
-            args.calibration_fdr_target,
-            threshold_at_target,
-            getattr(args, "calibration_plot_scale", "logit"),
-        )
-
-    if np.isnan(threshold_at_target):
-        passing = np.zeros(len(peak_records), dtype=bool)
-    else:
-        passing = real_scores_all >= threshold_at_target
-
-    def _write_raw(out_bed):
-        for peak in peak_records:
-            _write_peak_record(out_bed, peak, params)
-        return len(peak_records)
-
-    def _write_calibrated(out_bed):
-        n = 0
-        for peak, keep in zip(peak_records, passing):
-            if keep:
-                _write_peak_record(out_bed, peak, params)
-                n += 1
-        return n
-
-    raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_raw)
-    n_peaks, out_path = _write_peak_file(args.output, _write_calibrated)
-
-    if args.verbose:
-        print(f"Real peaks scored: {len(real_scores):,}")
-        print(
-            f"Null peaks scored: {len(null_scores):,} ({args.n_shuffle} shuffle(s))"
-        )
-        print(f"Calibration stat: {args.calibration_stat}")
-        print(f"FDR target: {args.calibration_fdr_target:.3f}")
-        if np.isnan(threshold_at_target):
-            print("Score threshold: N/A (target FDR never reached)")
-        else:
-            print(f"Score threshold: {threshold_at_target:.6f}")
-            print(f"Peaks at target: {n_at_target:,}")
-        print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
-        print(f"{n_peaks} calibrated peaks written to {out_path}")
-        if calibration_figure is not None:
-            print(f"Saved calibration figure to {calibration_figure}")
-
-
 def cmd_pipeline(args):
     """Run the full pipeline: score the genome, then call peaks.
 
@@ -738,8 +426,6 @@ def cmd_pipeline(args):
         ``batch_size`` (int), ``chroms`` (list or None), ``min_score`` (float),
         ``verbose`` (bool).
     """
-    if getattr(args, "calibrate", False):
-        _validate_calibration_args(args)
 
     def _run_with_bigwig(bw_prefix):
         peak_args = argparse.Namespace(
@@ -844,262 +530,13 @@ def cmd_pipeline(args):
         if args.verbose:
             print(f"{n_peaks} peaks written to {out_path}")
 
-    def _run_direct_calibrated():
-        peak_args = argparse.Namespace(
-            **{
-                **vars(args),
-                "support_plus_bigwig": args.pl_bigwig,
-                "support_minus_bigwig": args.mn_bigwig,
-            }
-        )
-        params = _peak_params(peak_args)
-        candidate_threshold = _candidate_threshold(params)
-        model, device = _load_trogdor_model(args.model, args.device, args.verbose)
-        chrom_sizes = _shared_chrom_sizes(args.pl_bigwig, args.mn_bigwig)
-        chroms_to_score = (
-            args.chroms if args.chroms is not None else list(chrom_sizes.keys())
-        )
-        support_handles = _open_support_handles(params)
-        rng = np.random.default_rng(args.calibration_seed)
-        raw_output = args.raw_output or _default_raw_peak_output(args.output)
-        calibration_smooth_bins = getattr(args, "calibration_smooth_bins", 5)
-
-        peak_records = []
-        real_score_lists = []
-        null_score_lists = []
-        null_log_path = getattr(args, "calibration_null_log", None)
-        null_log_rows = [] if null_log_path is not None else None
-        null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
-        null_placement_stats = [] if null_exclusion_margin is not None else None
-
-        try:
-            for chrom, chrom_len, probs in predict_genome(
-                model,
-                args.pl_bigwig,
-                args.mn_bigwig,
-                chroms=chroms_to_score,
-                output_stride=args.output_stride,
-                chunk_size=args.chunk_size,
-                overlap=args.overlap,
-                batch_size=args.batch_size,
-                transform=normalization,
-                device=device,
-                verbose=args.verbose,
-                num_workers=getattr(args, "num_workers", 0),
-            ):
-                bin_indices = np.where(probs >= candidate_threshold)[0]
-                intervals = [
-                    (
-                        int(i * args.output_stride),
-                        int(min((i + 1) * args.output_stride, chrom_len)),
-                        float(probs[i]),
-                    )
-                    for i in bin_indices
-                ]
-                chrom_peaks = _call_chrom_peaks(
-                    chrom, intervals, params, support_handles
-                )
-                if len(chrom_peaks) == 0:
-                    continue
-
-                peak_records.extend(chrom_peaks)
-                chrom_peaks_df = records_to_bed3(chrom_peaks)
-                real_scores = score_peak_records_from_array(
-                    chrom_peaks,
-                    probs,
-                    chrom,
-                    args.output_stride,
-                    args.calibration_stat,
-                    calibration_smooth_bins,
-                )
-                real_score_lists.append(np.asarray(real_scores, dtype=np.float32))
-
-                if args.null_scope == "candidate":
-                    allowed_df = candidate_intervals_to_bed3(chrom, intervals)
-                    allowed_df = _exclude_peaks_from_allowed(
-                        allowed_df,
-                        chrom_peaks,
-                        chrom,
-                        getattr(args, "null_exclusion_margin", None),
-                    )
-                else:
-                    allowed_df = pd.DataFrame(
-                        [(chrom, 0, int(chrom_len))],
-                        columns=["chrom", "start", "end"],
-                    )
-
-                null_source_df = (
-                    records_to_summit_bed3(chrom_peaks)
-                    if args.calibration_stat in {"summit", "smoothed_summit"}
-                    else chrom_peaks_df
-                )
-                chrom_placed = 0
-                for _ in range(args.n_shuffle):
-                    null_df = shuffle_peaks_within_intervals(
-                        null_source_df,
-                        allowed_df,
-                        [chrom],
-                        rng,
-                    )
-                    chrom_placed += len(null_df)
-                    if args.calibration_stat == "smoothed_summit":
-                        null_scores = score_centered_windows_from_array(
-                            null_df,
-                            probs,
-                            chrom,
-                            args.output_stride,
-                            calibration_smooth_bins,
-                        )
-                    else:
-                        null_scores = score_peaks_from_array(
-                            probs,
-                            null_df,
-                            chrom,
-                            args.output_stride,
-                            (
-                                "max"
-                                if args.calibration_stat == "summit"
-                                else args.calibration_stat
-                            ),
-                        )
-                    null_score_lists.append(finite_scores(null_scores))
-                    if null_log_rows is not None:
-                        null_log_rows.extend(null_log_records(null_df, null_scores))
-                if null_placement_stats is not None:
-                    null_placement_stats.append(
-                        (chrom, len(null_source_df) * args.n_shuffle, chrom_placed)
-                    )
-        finally:
-            if support_handles is not None:
-                support_handles[0].close()
-                support_handles[1].close()
-
-        _report_null_placement_shortfall(
-            null_placement_stats, null_exclusion_margin, args.verbose
-        )
-
-        if null_log_path is not None:
-            write_null_log(null_log_path, null_log_rows)
-            if args.verbose:
-                print(f"{len(null_log_rows):,} null draws logged to {null_log_path}")
-
-        if len(peak_records) == 0:
-            def _write_empty(out_bed):
-                return 0
-
-            raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_empty)
-            n_peaks, out_path = _write_peak_file(args.output, _write_empty)
-            if args.verbose:
-                print(
-                    "No peaks before calibration; wrote empty raw/calibrated "
-                    f"BEDs to {raw_out_path} and {out_path}"
-                )
-            return
-
-        real_scores_all = (
-            np.concatenate(real_score_lists)
-            if real_score_lists
-            else np.array([], dtype=np.float32)
-        )
-        real_scores = finite_scores(real_scores_all)
-        null_scores = (
-            np.concatenate(null_score_lists)
-            if null_score_lists
-            else np.array([], dtype=np.float32)
-        )
-
-        if len(real_scores) == 0:
-            raise ValueError("No finite peak scores available for calibration.")
-        if args.n_shuffle <= 0:
-            raise ValueError("--n_shuffle must be > 0 when --calibrate is used.")
-
-        thresholds, n_real, n_null, fdr = compute_fdr(
-            real_scores,
-            null_scores,
-            args.n_shuffle,
-            args.n_thresholds,
-            getattr(args, "threshold_grid", "quantile"),
-        )
-        threshold_at_target, n_at_target = select_fdr_threshold(
-            thresholds, n_real, fdr, args.calibration_fdr_target
-        )
-
-        if args.calibration_curve is not None:
-            write_calibration_table(
-                args.calibration_curve,
-                thresholds,
-                n_real,
-                n_null,
-                fdr,
-                len(real_scores),
-            )
-        calibration_figure = getattr(args, "calibration_figure", None)
-        if calibration_figure is not None:
-            write_calibration_figure(
-                calibration_figure,
-                real_scores,
-                null_scores,
-                thresholds,
-                n_real,
-                fdr,
-                args.calibration_stat,
-                args.calibration_fdr_target,
-                threshold_at_target,
-                getattr(args, "calibration_plot_scale", "logit"),
-            )
-
-        if np.isnan(threshold_at_target):
-            passing = np.zeros(len(peak_records), dtype=bool)
-        else:
-            passing = real_scores_all >= threshold_at_target
-
-        def _write_raw(out_bed):
-            for peak in peak_records:
-                _write_peak_record(out_bed, peak, params)
-            return len(peak_records)
-
-        def _write_calibrated(out_bed):
-            n = 0
-            for peak, keep in zip(peak_records, passing):
-                if keep:
-                    _write_peak_record(out_bed, peak, params)
-                    n += 1
-            return n
-
-        raw_n_peaks, raw_out_path = _write_peak_file(raw_output, _write_raw)
-        n_peaks, out_path = _write_peak_file(args.output, _write_calibrated)
-
-        if args.verbose:
-            print(f"Real peaks scored: {len(real_scores):,}")
-            print(
-                f"Null peaks scored: {len(null_scores):,} "
-                f"({args.n_shuffle} shuffle(s))"
-            )
-            print(f"Calibration stat: {args.calibration_stat}")
-            print(f"FDR target: {args.calibration_fdr_target:.3f}")
-            if np.isnan(threshold_at_target):
-                print("Score threshold: N/A (target FDR never reached)")
-            else:
-                print(f"Score threshold: {threshold_at_target:.6f}")
-                print(f"Peaks at target: {n_at_target:,}")
-            print(f"{raw_n_peaks} raw peaks written to {raw_out_path}")
-            print(f"{n_peaks} calibrated peaks written to {out_path}")
-            if calibration_figure is not None:
-                print(f"Saved calibration figure to {calibration_figure}")
-
     if args.save_bigwig is not None:
-        if getattr(args, "calibrate", False):
-            raise ValueError(
-                "--calibrate uses streamed probabilities; omit --save_bigwig."
-            )
         bw_prefix = (
             args.save_bigwig[: -len(".prob.bw")]
             if args.save_bigwig.endswith(".prob.bw")
             else args.save_bigwig
         )
         _run_with_bigwig(bw_prefix)
-    elif getattr(args, "calibrate", False):
-        _run_direct_calibrated()
     else:
         _run_direct()
 

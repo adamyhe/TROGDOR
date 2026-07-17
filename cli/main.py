@@ -179,95 +179,6 @@ def cli():
         help="Refined/profile caller only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
     )
     parser_pipeline.add_argument(
-        "--calibrate",
-        action="store_true",
-        help="Estimate an empirical FDR curve from streamed probabilities and write raw plus calibrated peak BEDs.",
-    )
-    parser_pipeline.add_argument(
-        "--raw_output",
-        default=None,
-        help="Raw peak BED path written with --calibrate before FDR filtering. Defaults to a .raw sibling of --output.",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_fdr_target",
-        type=float,
-        default=0.05,
-        help="Empirical FDR target used with --calibrate (default: 0.05).",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_curve",
-        default=None,
-        help="Optional TSV path for the streamed empirical FDR curve.",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_null_log",
-        default=None,
-        help="Diagnostic-only TSV path logging every null draw's chrom/start/end/score "
-        "(e.g. to check whether high-scoring null draws cluster near real summits). "
-        "Can be large with --null_scope candidate and many shuffles; scale via --n_shuffle.",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_figure",
-        default=None,
-        help="Optional image path for the streamed empirical FDR curve.",
-    )
-    parser_pipeline.add_argument(
-        "--threshold_grid",
-        choices=["quantile", "linear", "logit", "unique"],
-        default="quantile",
-        help="Threshold grid for empirical FDR evaluation (default: quantile).",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_plot_scale",
-        choices=["logit", "score"],
-        default="logit",
-        help="X-axis scale for --calibration_figure (default: logit).",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_stat",
-        choices=["smoothed_summit", "summit", "max", "mean"],
-        default="smoothed_summit",
-        help="Per-peak streamed probability statistic used for calibration (default: smoothed_summit).",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_smooth_bins",
-        type=int,
-        default=5,
-        help="Score bins averaged around each summit when --calibration_stat smoothed_summit is used (default: 5).",
-    )
-    parser_pipeline.add_argument(
-        "--null_scope",
-        choices=["candidate", "genome"],
-        default="candidate",
-        help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
-    )
-    parser_pipeline.add_argument(
-        "--null_exclusion_margin",
-        type=int,
-        default=None,
-        help="--null_scope candidate only: exclude each called peak (plus this many bp on "
-        "each side) from the null placement region, so null draws can't land on/beside a "
-        "real peak's own footprint (default: None, disabled — preserves prior behavior).",
-    )
-    parser_pipeline.add_argument(
-        "--n_shuffle",
-        type=int,
-        default=20,
-        help="Number of empirical null shuffles used with --calibrate (default: 20).",
-    )
-    parser_pipeline.add_argument(
-        "--n_thresholds",
-        type=int,
-        default=1000,
-        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 1000).",
-    )
-    parser_pipeline.add_argument(
-        "--calibration_seed",
-        type=int,
-        default=0,
-        help="Random seed for streamed empirical calibration (default: 0).",
-    )
-    parser_pipeline.add_argument(
         "--num_workers",
         type=int,
         default=4,
@@ -398,12 +309,6 @@ def cli():
         help="Minimum probability to report a bin as a peak (default: 0.95)",
     )
     parser_peaks.add_argument(
-        "--output_stride",
-        type=int,
-        default=16,
-        help="Score resolution in bp, used by smoothed calibration statistics (default: 16).",
-    )
-    parser_peaks.add_argument(
         "--mode",
         choices=["simple", "refined", "profile"],
         default="simple",
@@ -467,95 +372,6 @@ def cli():
         "--support_minus_bigwig",
         default=None,
         help="Minus-strand raw signal bigWig used with --min_support_signal.",
-    )
-    parser_peaks.add_argument(
-        "--calibrate",
-        action="store_true",
-        help="Estimate an empirical FDR curve from the input bigWig and write raw plus calibrated peak BEDs.",
-    )
-    parser_peaks.add_argument(
-        "--raw_output",
-        default=None,
-        help="Raw peak BED path written with --calibrate before FDR filtering. Defaults to a .raw sibling of --output.",
-    )
-    parser_peaks.add_argument(
-        "--calibration_fdr_target",
-        type=float,
-        default=0.05,
-        help="Empirical FDR target used with --calibrate (default: 0.05).",
-    )
-    parser_peaks.add_argument(
-        "--calibration_curve",
-        default=None,
-        help="Optional TSV path for the empirical FDR curve.",
-    )
-    parser_peaks.add_argument(
-        "--calibration_null_log",
-        default=None,
-        help="Diagnostic-only TSV path logging every null draw's chrom/start/end/score "
-        "(e.g. to check whether high-scoring null draws cluster near real summits). "
-        "Can be large with --null_scope candidate and many shuffles; scale via --n_shuffle.",
-    )
-    parser_peaks.add_argument(
-        "--calibration_figure",
-        default=None,
-        help="Optional image path for the empirical FDR curve.",
-    )
-    parser_peaks.add_argument(
-        "--threshold_grid",
-        choices=["quantile", "linear", "logit", "unique"],
-        default="quantile",
-        help="Threshold grid for empirical FDR evaluation (default: quantile).",
-    )
-    parser_peaks.add_argument(
-        "--calibration_plot_scale",
-        choices=["logit", "score"],
-        default="logit",
-        help="X-axis scale for --calibration_figure (default: logit).",
-    )
-    parser_peaks.add_argument(
-        "--calibration_stat",
-        choices=["smoothed_summit", "summit", "max", "mean"],
-        default="smoothed_summit",
-        help="Per-peak probability statistic used for calibration (default: smoothed_summit).",
-    )
-    parser_peaks.add_argument(
-        "--calibration_smooth_bins",
-        type=int,
-        default=5,
-        help="Score bins averaged around each summit when --calibration_stat smoothed_summit is used (default: 5).",
-    )
-    parser_peaks.add_argument(
-        "--null_scope",
-        choices=["candidate", "genome"],
-        default="candidate",
-        help="Null placement scope for --calibrate: thresholded candidate intervals or chromosome-wide (default: candidate).",
-    )
-    parser_peaks.add_argument(
-        "--null_exclusion_margin",
-        type=int,
-        default=None,
-        help="--null_scope candidate only: exclude each called peak (plus this many bp on "
-        "each side) from the null placement region, so null draws can't land on/beside a "
-        "real peak's own footprint (default: None, disabled — preserves prior behavior).",
-    )
-    parser_peaks.add_argument(
-        "--n_shuffle",
-        type=int,
-        default=20,
-        help="Number of empirical null shuffles used with --calibrate (default: 20).",
-    )
-    parser_peaks.add_argument(
-        "--n_thresholds",
-        type=int,
-        default=1000,
-        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 1000).",
-    )
-    parser_peaks.add_argument(
-        "--calibration_seed",
-        type=int,
-        default=0,
-        help="Random seed for empirical calibration (default: 0).",
     )
     parser_peaks.add_argument(
         "-v", "--verbose", action="store_true", help="Print progress messages"
