@@ -80,7 +80,7 @@ def _shared_chrom_sizes(pl_bigwig, mn_bigwig):
 
 def _peak_params(args):
     threshold = args.min_score
-    mode = getattr(args, "mode", "simple")
+    mode = getattr(args, "mode", "profile")
     params = {
         "threshold": threshold,
         "mode": mode,
@@ -460,7 +460,7 @@ def cmd_pipeline(args):
                 input=f"{bw_prefix}.prob.bw",
                 output=args.output,
                 min_score=args.min_score,
-                mode=getattr(args, "mode", "simple"),
+                mode=getattr(args, "mode", "profile"),
                 max_gap=getattr(args, "max_gap", 0),
                 min_width=getattr(args, "min_width", 0),
                 max_width=getattr(args, "max_width", None),

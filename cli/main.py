@@ -414,7 +414,7 @@ def cli():
         "--fdr_target",
         type=float,
         default=None,
-        help="FDR target for reporting the score threshold; omit to skip (default: 0.05)",
+        help="FDR target for reporting the score threshold; omit to skip.",
     )
     parser_fdr.add_argument(
         "--n_thresholds",
