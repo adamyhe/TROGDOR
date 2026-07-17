@@ -121,6 +121,41 @@ def score_peak_records_from_bigwig(
     return score_peaks(bw, peaks_df, chrom_sizes, stat, [chrom])
 
 
+def null_log_records(null_df, scores):
+    """Pair null-draw positions with their scores for diagnostic logging.
+
+    ``null_df`` and ``scores`` must be row-aligned (as returned together by a
+    ``shuffle_peaks_within_intervals`` call and the scoring function applied
+    to it). Rows with a non-finite score are dropped.
+
+    Returns
+    -------
+    list of (chrom, start, end, score)
+    """
+    scores = np.asarray(scores, dtype=np.float32)
+    mask = np.isfinite(scores)
+    if not mask.any():
+        return []
+    chroms = null_df["chrom"].to_numpy()[mask]
+    starts = null_df["start"].to_numpy(dtype=np.int64)[mask]
+    ends = null_df["end"].to_numpy(dtype=np.int64)[mask]
+    return list(zip(chroms.tolist(), starts.tolist(), ends.tolist(), scores[mask].tolist()))
+
+
+def write_null_log(path, records):
+    """Write logged null-draw positions and scores to a TSV (optionally .gz).
+
+    ``records`` is a list of (chrom, start, end, score) tuples, typically
+    accumulated across all shuffles/chromosomes via ``null_log_records``.
+    Intended for diagnosing calibration (e.g. checking whether high-scoring
+    null draws cluster near real peak summits) rather than for production
+    use, so no bgzip/tabix support — this can be large in candidate-null
+    scope with many shuffles.
+    """
+    table = pd.DataFrame(records, columns=["chrom", "start", "end", "score"])
+    table.to_csv(path, sep="\t", index=False, float_format="%.6g")
+
+
 def write_calibration_table(path, thresholds, n_real, n_null, fdr, n_total):
     """Write an empirical FDR curve TSV."""
     recall = np.divide(

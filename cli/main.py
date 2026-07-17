@@ -200,6 +200,13 @@ def cli():
         help="Optional TSV path for the streamed empirical FDR curve.",
     )
     parser_pipeline.add_argument(
+        "--calibration_null_log",
+        default=None,
+        help="Diagnostic-only TSV path logging every null draw's chrom/start/end/score "
+        "(e.g. to check whether high-scoring null draws cluster near real summits). "
+        "Can be large with --null_scope candidate and many shuffles; scale via --n_shuffle.",
+    )
+    parser_pipeline.add_argument(
         "--calibration_figure",
         default=None,
         help="Optional image path for the streamed empirical FDR curve.",
@@ -473,6 +480,13 @@ def cli():
         "--calibration_curve",
         default=None,
         help="Optional TSV path for the empirical FDR curve.",
+    )
+    parser_peaks.add_argument(
+        "--calibration_null_log",
+        default=None,
+        help="Diagnostic-only TSV path logging every null draw's chrom/start/end/score "
+        "(e.g. to check whether high-scoring null draws cluster near real summits). "
+        "Can be large with --null_scope candidate and many shuffles; scale via --n_shuffle.",
     )
     parser_peaks.add_argument(
         "--calibration_figure",

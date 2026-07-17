@@ -18,6 +18,7 @@ from huggingface_hub import hf_hub_download, try_to_load_from_cache
 from chiaroscuro.calibration import (
     candidate_intervals_to_bed3,
     finite_scores,
+    null_log_records,
     records_to_bed3,
     records_to_summit_bed3,
     score_centered_windows_from_array,
@@ -26,6 +27,7 @@ from chiaroscuro.calibration import (
     score_peak_records_from_bigwig,
     write_calibration_figure,
     write_calibration_table,
+    write_null_log,
 )
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
@@ -481,6 +483,8 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
     peak_records = []
     real_score_lists = []
     null_score_lists = []
+    null_log_path = getattr(args, "calibration_null_log", None)
+    null_log_rows = [] if null_log_path is not None else None
 
     try:
         for chrom in sorted(chrom_sizes):
@@ -543,10 +547,17 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                         [chrom],
                     )
                 null_score_lists.append(finite_scores(null_scores))
+                if null_log_rows is not None:
+                    null_log_rows.extend(null_log_records(null_df, null_scores))
     finally:
         if support_handles is not None:
             support_handles[0].close()
             support_handles[1].close()
+
+    if null_log_path is not None:
+        write_null_log(null_log_path, null_log_rows)
+        if args.verbose:
+            print(f"{len(null_log_rows):,} null draws logged to {null_log_path}")
 
     if len(peak_records) == 0:
         def _write_empty(out_bed):
@@ -796,6 +807,8 @@ def cmd_pipeline(args):
         peak_records = []
         real_score_lists = []
         null_score_lists = []
+        null_log_path = getattr(args, "calibration_null_log", None)
+        null_log_rows = [] if null_log_path is not None else None
 
         try:
             for chrom, chrom_len, probs in predict_genome(
@@ -880,10 +893,17 @@ def cmd_pipeline(args):
                             ),
                         )
                     null_score_lists.append(finite_scores(null_scores))
+                    if null_log_rows is not None:
+                        null_log_rows.extend(null_log_records(null_df, null_scores))
         finally:
             if support_handles is not None:
                 support_handles[0].close()
                 support_handles[1].close()
+
+        if null_log_path is not None:
+            write_null_log(null_log_path, null_log_rows)
+            if args.verbose:
+                print(f"{len(null_log_rows):,} null draws logged to {null_log_path}")
 
         if len(peak_records) == 0:
             def _write_empty(out_bed):

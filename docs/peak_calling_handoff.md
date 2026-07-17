@@ -143,6 +143,70 @@ Proposed staged plan:
   - broad noisy plateaus do not explode into many tiny peaks,
   - nested/unmerged BED intervals are handled correctly in benchmarks.
 
+## Status (2026-07-17)
+
+The staged plan above is implemented: `call_profile_peaks` (candidate
+seeding, valley splitting, boundary trimming), empirical calibration
+(`--calibrate` on both `peaks` and `pipeline`, `candidate`/`genome` null
+scopes, `summit`/`smoothed_summit`/`max`/`mean` statistics), and
+strand-aware `--min_support_signal` gating are all in place. What the staged
+plan did not anticipate is that self-referential calibration would itself be
+hard to tune given how TROGDOR's score distribution actually looks in
+practice — see `docs/trogdor_dreg_peak_calling_findings.md`'s
+"Post-Implementation Calibration Findings" for the concrete trade-off
+(candidate-null either fails to discriminate or over-punishes, genome-null
+under-discriminates, depending on `min_score`/`seed_score`). The next steps
+below are motivated by that finding, not by the original geometric concerns.
+
+## Next Steps (Post-Calibration-Experiment)
+
+1. **A richer, multi-feature split/merge and/or null-comparison decision**
+   (promoted to top priority — see the informative-sites finding below for
+   why), borrowing the role dREG's random forest plays rather than deciding
+   on `smoothed_summit` score alone. Candidate features: valley depth,
+   distance between adjacent maxima, peak width, local density of other
+   candidates nearby, and raw plus/minus coverage support. This is real
+   work (feature engineering plus some kind of classifier or multi-feature
+   scoring rule, not just a CLI flag), but the evidence below points at it
+   as the actual axis of the problem: the candidate pool is not
+   contaminated by background, it's genuinely full of comparably-confident
+   real local maxima, and a single scalar score can't rank among them.
+
+2. **Informative-site pre-filtering at candidate-seeding time — demoted,
+   likely low-value.** The idea was to restrict candidate seeding and null
+   placement to bins with real read support (dREG's heuristic: >3 reads in
+   a 100bp window on either strand, or >1 read in a 1kbp window on both
+   strands), on the theory that some fraction of the `>= seed_score` pool
+   is model noise in low/no-coverage regions.
+
+   *Prior art rules this out.* `scripts/benchmark/infp_filter.py` already
+   ports this exact dREG heuristic and was previously tried in the legacy
+   pipeline: mask a dense `prob.bw`, then run the *external-truth* `trogdor
+   fdr` (genome-wide uniform null, `--stat max`/`mean`, groHMM/SCREEN as
+   truth) against the masked track (see `scripts/benchmark/_results/fdr.txt`,
+   output `GM12878.trogdor.infp.groHMM.fdr.pdf`). The observed effect was
+   that masking flattened the null distribution to a spike at 0 — but that
+   wasn't fixing a real problem: the null was already well-separated from
+   real *without* the mask (see `GM12878.trogdor.groHMM.fdr.png`). That
+   means essentially none of the model's higher-scoring output sits on
+   genuinely uninformative (no-coverage) positions in the first place — the
+   model isn't confidently wrong about background. That's a property of the
+   model's own calibration, not of the genome-wide-null pipeline stage it
+   was tested in, so it should transfer: the `>= seed_score` candidate pool
+   used by `--null_scope candidate` is almost certainly *also* already
+   concentrated on covered positions. Filtering it by informative sites
+   would likely just re-confirm that without shrinking the pool — coverage
+   isn't the axis separating "real summit" from "other candidate region"
+   here; both are covered. Not worth implementing unless #1 stalls and this
+   gets revisited with direct evidence from the new pipeline.
+
+3. **Centroid reporting + two-pass sparse-then-dense scoring** — lower
+   priority. These are mostly about output richness (probability-weighted
+   centroid alongside the summit) and summit-localization precision
+   (dREG scores informative sites sparsely first, then densifies inside
+   promising regions), not directly aimed at the calibration difficulty
+   above.
+
 ## Primary References Checked
 
 - Danko-Lab dREG GitHub repository and `dREG/R/peak_calling.R`.

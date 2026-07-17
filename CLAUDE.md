@@ -24,26 +24,35 @@ The package installs four CLI aliases that all invoke the same entry point: `TRO
 
 ## CLI Pipeline
 
-The tool operates in three subcommands:
+The tool operates in four subcommands:
 
-1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of BH-adjusted probabilities
-2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig using a score threshold derived from a BH FDR threshold
-3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix
-4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for candidate peaks from a probability bigWig; shuffles the peak set to build a null distribution and reports the score threshold at a target FDR
+1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of raw sigmoid probabilities (no multiple-testing correction is applied at this stage)
+2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig. `--mode simple` is the legacy threshold-and-merge caller; `--mode refined` adds `max_gap`/`min_width`/summit columns; `--mode profile` (recommended) seeds candidate blocks at a permissive `--seed_score`, splits/merges local maxima by valley depth, and reports summit columns. `--calibrate` additionally estimates an empirical FDR (shuffle-based, non-parametric — TROGDOR's scores are not assumed to follow a parametric null) and writes separate raw/calibrated BEDs.
+3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix; supports the same `--mode`/`--calibrate` options as `peaks`
+4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for an *externally supplied* candidate peak set (e.g. ENCODE cCREs) against a probability bigWig; shuffles the peak set genome-wide to build a null distribution and reports the score threshold at a target FDR. This is for validating against independent annotations, not for self-calibrating TROGDOR's own peak calls — use `--calibrate` on `peaks`/`pipeline` for that.
 
 Example (individual steps):
 ```bash
 trogdor score -M model.torch -p plus.bw -m minus.bw -o scores.bw -d cuda
-trogdor peaks -i scores.bw -o peaks.bed.gz --fdr_threshold 0.05
+trogdor peaks -i scores.bw -o peaks.bed.gz --mode profile --seed_score 0.5 --min_score 0.95
 ```
 
-Example (FDR estimation):
+Example (self-calibrated peaks, no model re-run needed if you already have a scored bigWig):
+
+```bash
+trogdor peaks -i scores.bw -o peaks.calibrated.bed.gz --mode profile --seed_score 0.5 --min_score 0.95 \
+  --calibrate --null_scope candidate --calibration_stat smoothed_summit --calibration_fdr_target 0.1
+```
+
+Example (FDR estimation against independent ground truth):
 
 ```bash
 trogdor fdr -b scores.bw -t candidate_peaks.bed.gz --fdr_target 0.05 --output fdr_table.tsv --figure fdr_curve.png
 ```
 
 The `fdr` subcommand scores each candidate peak with the summary statistic (`--stat max` or `mean`), then shuffles those peaks within chromosome bounds to build a null distribution. FDR at threshold `t` is estimated as `min(1, N_null(t) / N_real(t))`, averaged over `--n_shuffle` independent shuffles (default 1). The score threshold at the target FDR is printed to stdout.
+
+`--calibrate` (on `peaks`/`pipeline`) computes the same style of empirical FDR, but self-referentially against TROGDOR's own candidate peaks rather than an external BED — see `docs/trogdor_dreg_peak_calling_findings.md` for why this is calibration-sensitive (TROGDOR's score distribution is spiky/saturating, not smoothly graded) and `docs/peak_calling_handoff.md` for open next steps.
 
 Example (full pipeline):
 
@@ -67,23 +76,27 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `benchmark.py` – Genome-wide AUROC/AUPRC from a trained model and peak BED ground truth
 - `benchmark_bw.py` – Same benchmarking from a pre-computed probability bigWig
 - `benchmark_tile_position.py` – Compares auPRC for tile-centre vs tile-edge bins across overlapping chunks
+- `compare_peaks.py` / `truth_panel.py` – Peak-level overlap benchmarking against ground-truth BEDs (bin/peak-level precision-recall, centre-window hits); both merge subject intervals before computing coverage fractions to avoid double-counting nested/overlapping calls
 - `frip.py` – Calculates raw and normalized FRIP (Fraction of Reads In Peaks) from stranded bigWigs and a peak BED; normalized FRIP corrects for peak-set size (equivalent to fold-enrichment over uniform expectation)
 - `logit_dist.py` – Logit score distribution diagnostic: reads a probability bigWig, converts to logits, and produces a histogram+KDE / empirical-CDF figure with quantile reference lines
+- `infp_filter.py` – Applies dREG's informative-positions heuristic (read-count thresholds in 100bp/1kbp windows) to mask a probability bigWig down to positions with real coverage support. Currently a standalone post-hoc mask for the legacy simple-threshold + external-truth-FDR workflow, not wired into candidate seeding — see `docs/peak_calling_handoff.md` for why integrating it earlier (at seed time, ahead of `--calibrate`) is an open next step
 
 ## Architecture
 
 ### Package layout
 
 - `cli/main.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
-- `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
-- `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `bh_correct()`, `merge_intervals()`, `encode_labels()`
+- `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`, `cmd_fdr`
+- `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
 - `src/chiaroscuro/losses.py` – `focal_tversky_loss` (default), `tversky_loss`, `focal_loss`
 - `src/chiaroscuro/dataset.py` – Dataset classes for training; not used in deployment
-- `src/chiaroscuro/predict.py` – `predict_chromosome()` (sliding-window chromosome scoring via DataLoader) and `predict_genome()` (genome-wide generator with background IO prefetch)
-- `src/chiaroscuro/stats.py` – Empirical FDR helpers: `score_peaks()` (summarise bigWig scores over a peak BED), `shuffle_peaks()` (randomise peak positions within chromosome bounds), `compute_fdr()` (build FDR curve from real and null scores)
+- `src/chiaroscuro/predict.py` – `predict_chromosome()` (sliding-window chromosome scoring via DataLoader) and `predict_genome()` (genome-wide generator with background IO prefetch); yields raw `torch.sigmoid` probabilities, no correction applied
+- `src/chiaroscuro/peaks.py` – Peak-calling logic: `call_peaks()` (legacy threshold-and-merge), `call_profile_peaks()` (seed/smooth/valley-split/boundary-trim caller), `resolve_seed_score()` (defaults unset `seed_score` to `min(min_score, 0.5)` so profile mode's local-maxima splitting has more than one bin to work with)
+- `src/chiaroscuro/stats.py` – Empirical FDR primitives: `score_peaks()`/`score_peaks_from_array()` (summarise bigWig/array scores over a peak BED), `shuffle_peaks()` (uniform genome-wide null), `shuffle_peaks_within_intervals()` (null constrained to allowed regions, e.g. candidate footprint), `compute_fdr()` (build an FDR curve; `threshold_grid` of `quantile`/`linear`/`logit`/`unique` — `quantile` is default and oversamples the high-score tail, since TROGDOR's scores concentrate there), `select_fdr_threshold()`
+- `src/chiaroscuro/calibration.py` – Shared self-calibration helpers used by both `cmd_peaks --calibrate` and `cmd_pipeline --calibrate`: BED conversion, per-peak scoring (`summit`/`smoothed_summit`/`max`/`mean`), and table/figure writers (`write_calibration_table()`, `write_calibration_figure()`)
 - `src/chiaroscuro/logger.py` – Training metrics logger (copied from bpnet-lite)
 
 ### Model architecture (`TROGDOR`)
@@ -119,6 +132,6 @@ conda run -n torch <command>
 Examples:
 
 ```bash
-conda run -n torch python -c "from chiaroscuro.utils import bh_correct; print('OK')"
+conda run -n torch python -c "from chiaroscuro.peaks import call_profile_peaks; print('OK')"
 conda run -n torch trogdor score --help
 ```
