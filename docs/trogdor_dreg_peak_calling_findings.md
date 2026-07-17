@@ -170,6 +170,94 @@ For benchmarking and production use:
   recall/precision, interval PPV, and empirical FDR curves.
 - Avoid any TROGDOR p-value unless it is explicitly empirical/non-parametric.
 
+## Implementation Status (2026-07-17)
+
+The design direction below has been implemented, not just proposed:
+
+- `src/chiaroscuro/peaks.py` (`call_profile_peaks`, `resolve_seed_score`) —
+  seed-threshold candidate blocks, light smoothing, local-maxima/valley
+  splitting, optional boundary trimming, `min_width`/`max_width` guardrails.
+- `src/chiaroscuro/calibration.py` + `src/chiaroscuro/stats.py` — empirical,
+  non-parametric calibration: `summit`/`smoothed_summit`/`max`/`mean`
+  statistics, `candidate`/`genome` null scopes, and a `quantile` (default,
+  tail-enriched)/`linear`/`logit`/`unique` threshold grid for `compute_fdr`.
+- `--calibrate` is wired into both `trogdor pipeline` (streamed from the
+  model) and `trogdor peaks` (reads directly from a saved bigWig, so
+  self-calibration sweeps don't require re-scoring).
+- The nested-overlap bug in `scripts/benchmark/compare_peaks.py` /
+  `truth_panel.py` (unmerged subject intervals inflating coverage fractions)
+  is fixed, with regression tests in `tests/test_benchmark_interval_helpers.py`.
+
+What has **not** been re-established: the peak-level benchmark numbers in
+`scripts/benchmark/_results/peak_benchmarks.txt` predate all of the above —
+they still reflect the old threshold-and-merge caller. Re-running that
+benchmark with `--mode profile` (+ a calibrated FDR target) against
+dREG/PINTS/groHMM truth remains the outstanding validation step.
+
+## Post-Implementation Calibration Findings (2026-07-17)
+
+Running `--calibrate` end-to-end on real data (G7, GM12878 GRO-seq) surfaced
+a second-order problem beyond peak geometry: **self-referential empirical
+calibration is itself hard to tune, because TROGDOR's own probability output
+is not smoothly graded.**
+
+`scripts/benchmark/logit_dist.py` on dense (`--min_score 0`) probability
+tracks for both samples shows the same shape: a dominant, very narrow
+background mode around logit ≈ -3 to -4 (p ≈ 0.02–0.05) holding roughly
+55–60% of all mass, plus a long, thin tail toward saturation — only the top
+~5% of bins (q95) exceed p = 0.5. The distribution is closer to a couple of
+sharp point-masses than a continuum, which is the mechanism behind the
+"spiky and uniform/well-calibrated" difficulty: once you condition on
+"candidate" (anything above a permissive threshold), most of what remains
+looks comparably extreme to the model, leaving little smooth gradient for a
+same-population empirical null to rank against.
+
+This produces a three-way trade-off, none of whose corners give a usable
+default (all runs: `--mode profile --seed_score 0.5 --calibration_stat
+smoothed_summit --calibration_smooth_bins 5 --calibration_fdr_target 0.05`):
+
+| `min_score` | `null_scope` | raw peaks (G7 / GM12878) | calibrated | failure mode |
+| --- | --- | --- | --- | --- |
+| 0.5 (= seed_score) | `candidate` | 229,037 / 395,688 | ~0 | null and real are drawn from the same overly permissive population; empirical FDR floors around 13-16% and never reaches 0.05 |
+| 0.95 | `genome` | 35,058 / 70,341 | 100% / 100% | genome background is such an easy bar that literally every raw candidate passes trivially — no discrimination within the candidate set |
+| 0.95 | `candidate` | 35,058 / 70,341 | 26% / 8.5% | now discriminates, but the FDR-vs-threshold curve is a near step-function (e.g. G7: 8,985 peaks at FDR 0.05 vs. 35,058 — the full raw set — at FDR 0.15); a strict 5% target lands right on the cliff |
+
+Practical takeaways:
+
+- `min_score` and `seed_score` are not interchangeable: `min_score` gates
+  which local maxima are ever *emitted* as raw peaks in `call_profile_peaks`
+  (any summit that never clears it is dropped before calibration sees it at
+  all), while `seed_score` only shapes candidate-block geometry for
+  splitting. Collapsing them to the same value (both at 0.5) reproduces the
+  degenerate first row above.
+- `--null_scope candidate` only becomes informative once `min_score` is
+  strictly higher than `seed_score` (so "real" is a genuine strict subset of
+  the broader seeded population the null draws from) — but even then, the
+  FDR curve is steep enough that `--calibration_fdr_target 0.05` may be an
+  unreasonably strict choice for this scoring scheme. Inspect the
+  `--calibration_curve` TSV's `n_real` vs. `fdr` columns directly rather
+  than assuming 0.05 is the right target; 5-15% is a defensible range to
+  scan before concluding calibration has "failed."
+- `--null_scope genome` is a weak negative control once conditioned on a
+  strict `min_score` — useful as a sanity check ("are candidates enriched
+  over naive background at all?") but not for pruning within the candidate
+  set.
+- Self-referential calibration should be treated as a ranking/triage tool,
+  not a substitute for validating the final call set against independent
+  ground truth (`trogdor fdr` against ENCODE cCREs, dREG, or groHMM calls).
+
+See `docs/peak_calling_handoff.md` for the next-step directions this
+motivates. Top candidate: a richer multi-feature split/merge/null-comparison
+decision along the lines of dREG's random forest (valley depth, width,
+local candidate density, coverage support — not `smoothed_summit` score
+alone). Informative-site pre-filtering at candidate-seeding time was
+considered and demoted: `scripts/benchmark/infp_filter.py`'s prior
+application (masking a dense `prob.bw` before the legacy external-truth
+`trogdor fdr`) flattened the null to zero without fixing anything that was
+actually broken, implying the model's higher-scoring output is already
+concentrated on genuinely covered positions — coverage isn't the axis
+separating real summits from other candidate regions here.
+
 ## Sources Checked
 
 - Danko-Lab dREG README:

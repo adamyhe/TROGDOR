@@ -30,8 +30,10 @@ from chiaroscuro.stats import (
     shuffle_peaks_within_intervals,
 )
 from chiaroscuro.calibration import (
+    null_log_records,
     score_peak_records_from_array,
     write_calibration_figure,
+    write_null_log,
 )
 
 
@@ -244,3 +246,28 @@ def test_write_calibration_figure(tmp_path):
 
     assert path.exists()
     assert path.stat().st_size > 0
+
+
+def test_null_log_records_pairs_positions_with_scores_and_drops_nan():
+    null_df = pd.DataFrame(
+        [("chr1", 0, 16), ("chr1", 32, 48), ("chr1", 64, 80)],
+        columns=["chrom", "start", "end"],
+    )
+    scores = np.array([0.9, np.nan, 0.4], dtype=np.float32)
+
+    records = null_log_records(null_df, scores)
+
+    assert records == [("chr1", 0, 16, pytest.approx(0.9)), ("chr1", 64, 80, pytest.approx(0.4))]
+
+
+def test_write_null_log_round_trips(tmp_path):
+    path = tmp_path / "null_log.tsv"
+    records = [("chr1", 0, 16, 0.9), ("chr2", 100, 116, 0.4)]
+
+    write_null_log(path, records)
+
+    table = pd.read_csv(path, sep="\t")
+    assert list(table.columns) == ["chrom", "start", "end", "score"]
+    assert len(table) == 2
+    assert table.iloc[0]["chrom"] == "chr1"
+    assert table.iloc[1]["score"] == pytest.approx(0.4)

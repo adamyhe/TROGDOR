@@ -8,6 +8,7 @@ since they do real bigWig I/O (see tests/conftest.py).
 
 import argparse
 
+import pandas as pd
 import pybigtools
 import pytest
 
@@ -126,6 +127,41 @@ def test_cmd_peaks_calibrate_genome_null_end_to_end(tmp_path):
         "recall_proxy",
     ]
     assert len(curve) > 1
+
+
+def test_cmd_peaks_calibrate_writes_null_log(tmp_path):
+    chrom, chrom_len, stride = "chr1", 16000, 16
+    bw_path = tmp_path / "scores.bw"
+    intervals = _dense_intervals(
+        chrom_len,
+        stride,
+        background_score=0.05,
+        bumps=[(8000, 8048, 0.97), (2000, 2064, 0.55)],
+    )
+    _write_bigwig(bw_path, chrom, chrom_len, stride, intervals)
+
+    output = tmp_path / "peaks.calibrated.bed.gz"
+    raw_output = tmp_path / "peaks.raw.bed.gz"
+    null_log_path = tmp_path / "null_log.tsv"
+
+    args = _base_peaks_args(
+        bw_path,
+        output,
+        raw_output=str(raw_output),
+        seed_score=0.5,
+        null_scope="candidate",
+        n_shuffle=3,
+        calibration_null_log=str(null_log_path),
+    )
+    cmd_peaks(args)
+
+    assert null_log_path.exists()
+    table = pd.read_csv(null_log_path, sep="\t")
+    assert list(table.columns) == ["chrom", "start", "end", "score"]
+    # one raw peak x 3 shuffles worth of null draws logged
+    assert len(table) == 3
+    assert (table["chrom"] == chrom).all()
+    assert (table["end"] > table["start"]).all()
 
 
 def test_cmd_peaks_calibrate_candidate_null_runs(tmp_path):
