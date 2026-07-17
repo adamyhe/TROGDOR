@@ -290,6 +290,31 @@ def _exclude_peaks_from_allowed(allowed_df, chrom_peaks, chrom, margin):
     return subtract_intervals_df(allowed_df, exclude_df, margin=margin, chroms=[chrom])
 
 
+def _report_null_placement_shortfall(null_placement_stats, null_exclusion_margin, verbose):
+    """Warn when --null_exclusion_margin leaves too little territory to place
+    the requested number of null draws (chrom_expected = n_peaks * n_shuffle).
+    """
+    if not verbose or null_exclusion_margin is None or not null_placement_stats:
+        return
+    total_expected = sum(exp for _, exp, _ in null_placement_stats)
+    if total_expected == 0:
+        return
+    total_placed = sum(placed for _, _, placed in null_placement_stats)
+    short = [(c, exp, p) for c, exp, p in null_placement_stats if p < exp]
+    print(
+        f"Null placement after --null_exclusion_margin={null_exclusion_margin}: "
+        f"{total_placed:,}/{total_expected:,} draws placed "
+        f"({len(short)}/{len(null_placement_stats)} chromosomes short)"
+    )
+    if short:
+        worst = sorted(short, key=lambda t: t[2] - t[1])[:5]
+        for chrom, exp, placed in worst:
+            print(
+                f"  {chrom}: placed {placed:,}/{exp:,} null draws — candidate "
+                "territory may be exhausted after exclusion; consider a smaller margin"
+            )
+
+
 def _default_raw_peak_output(output):
     if output.endswith(".bed.gz"):
         return f"{output[:-len('.bed.gz')]}.raw.bed.gz"
@@ -502,6 +527,8 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
     null_score_lists = []
     null_log_path = getattr(args, "calibration_null_log", None)
     null_log_rows = [] if null_log_path is not None else None
+    null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
+    null_placement_stats = [] if null_exclusion_margin is not None else None
 
     try:
         for chrom in sorted(chrom_sizes):
@@ -544,10 +571,12 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                 if args.calibration_stat in {"summit", "smoothed_summit"}
                 else records_to_bed3(chrom_peaks)
             )
+            chrom_placed = 0
             for _ in range(args.n_shuffle):
                 null_df = shuffle_peaks_within_intervals(
                     null_source_df, allowed_df, [chrom], rng
                 )
+                chrom_placed += len(null_df)
                 if args.calibration_stat == "smoothed_summit":
                     null_scores = score_centered_windows_from_bigwig(
                         null_df,
@@ -572,10 +601,18 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
                 null_score_lists.append(finite_scores(null_scores))
                 if null_log_rows is not None:
                     null_log_rows.extend(null_log_records(null_df, null_scores))
+            if null_placement_stats is not None:
+                null_placement_stats.append(
+                    (chrom, len(null_source_df) * args.n_shuffle, chrom_placed)
+                )
     finally:
         if support_handles is not None:
             support_handles[0].close()
             support_handles[1].close()
+
+    _report_null_placement_shortfall(
+        null_placement_stats, null_exclusion_margin, args.verbose
+    )
 
     if null_log_path is not None:
         write_null_log(null_log_path, null_log_rows)
@@ -832,6 +869,8 @@ def cmd_pipeline(args):
         null_score_lists = []
         null_log_path = getattr(args, "calibration_null_log", None)
         null_log_rows = [] if null_log_path is not None else None
+        null_exclusion_margin = getattr(args, "null_exclusion_margin", None)
+        null_placement_stats = [] if null_exclusion_margin is not None else None
 
         try:
             for chrom, chrom_len, probs in predict_genome(
@@ -894,6 +933,7 @@ def cmd_pipeline(args):
                     if args.calibration_stat in {"summit", "smoothed_summit"}
                     else chrom_peaks_df
                 )
+                chrom_placed = 0
                 for _ in range(args.n_shuffle):
                     null_df = shuffle_peaks_within_intervals(
                         null_source_df,
@@ -901,6 +941,7 @@ def cmd_pipeline(args):
                         [chrom],
                         rng,
                     )
+                    chrom_placed += len(null_df)
                     if args.calibration_stat == "smoothed_summit":
                         null_scores = score_centered_windows_from_array(
                             null_df,
@@ -924,10 +965,18 @@ def cmd_pipeline(args):
                     null_score_lists.append(finite_scores(null_scores))
                     if null_log_rows is not None:
                         null_log_rows.extend(null_log_records(null_df, null_scores))
+                if null_placement_stats is not None:
+                    null_placement_stats.append(
+                        (chrom, len(null_source_df) * args.n_shuffle, chrom_placed)
+                    )
         finally:
             if support_handles is not None:
                 support_handles[0].close()
                 support_handles[1].close()
+
+        _report_null_placement_shortfall(
+            null_placement_stats, null_exclusion_margin, args.verbose
+        )
 
         if null_log_path is not None:
             write_null_log(null_log_path, null_log_rows)
