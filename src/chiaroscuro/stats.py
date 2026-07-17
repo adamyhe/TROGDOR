@@ -220,7 +220,64 @@ def score_peaks_from_array(scores, peaks_df, chrom, output_stride, stat):
     return out
 
 
-def compute_fdr(real_scores, null_scores, n_shuffle, n_thresholds):
+def _logit(x, eps=1e-6):
+    x = np.clip(np.asarray(x, dtype=np.float64), eps, 1 - eps)
+    return np.log(x / (1 - x))
+
+
+def _inv_logit(x):
+    x = np.asarray(x, dtype=np.float64)
+    return 1 / (1 + np.exp(-x))
+
+
+def _thresholds_from_scores(real_scores, null_scores, n_thresholds, threshold_grid):
+    scores = (
+        np.concatenate([real_scores, null_scores])
+        if len(null_scores)
+        else np.asarray(real_scores)
+    )
+    scores = np.asarray(scores, dtype=np.float64)
+    scores = scores[~np.isnan(scores)]
+    if len(scores) == 0:
+        raise ValueError("Cannot compute FDR with no finite scores.")
+
+    if threshold_grid == "linear":
+        return np.linspace(scores.min(), scores.max(), n_thresholds)
+
+    if threshold_grid == "logit":
+        if scores.min() < 0 or scores.max() > 1:
+            raise ValueError("--threshold_grid logit requires scores in [0, 1].")
+        logits = _logit(scores)
+        return _inv_logit(np.linspace(logits.min(), logits.max(), n_thresholds))
+
+    if threshold_grid == "unique":
+        unique = np.unique(scores)
+        if len(unique) <= n_thresholds:
+            return unique
+        idx = np.linspace(0, len(unique) - 1, n_thresholds).round().astype(int)
+        return unique[np.unique(idx)]
+
+    if threshold_grid == "quantile":
+        n_body = max(2, n_thresholds // 2)
+        n_tail = max(2, n_thresholds - n_body)
+        body_q = np.linspace(0, 1, n_body)
+        # Enrich the high-score tail, where saturated TROGDOR probabilities
+        # often make the empirical FDR decision.
+        min_tail_step = max(1 / max(len(scores), 1), 1e-8)
+        tail_q = 1 - np.geomspace(1e-2, min_tail_step, n_tail)
+        q = np.unique(np.concatenate([body_q, tail_q, [0.0, 1.0]]))
+        return np.unique(np.quantile(scores, q))
+
+    raise ValueError(f"Unknown threshold_grid: {threshold_grid}")
+
+
+def compute_fdr(
+    real_scores,
+    null_scores,
+    n_shuffle,
+    n_thresholds,
+    threshold_grid="quantile",
+):
     """Compute an empirical FDR curve from real and null peak scores.
 
     Parameters
@@ -233,7 +290,9 @@ def compute_fdr(real_scores, null_scores, n_shuffle, n_thresholds):
         Number of shuffles used to produce ``null_scores``; used to average
         the null count.
     n_thresholds : int
-        Number of evenly-spaced thresholds to evaluate.
+        Number of thresholds to evaluate.
+    threshold_grid : {"quantile", "linear", "logit", "unique"}
+        Strategy used to choose score thresholds.
 
     Returns
     -------
@@ -244,23 +303,21 @@ def compute_fdr(real_scores, null_scores, n_shuffle, n_thresholds):
     fdr : np.ndarray, shape (n_thresholds,)
         Estimated FDR at each threshold, clipped to [0, 1].
     """
-    t_min = (
-        min(real_scores.min(), null_scores.min())
-        if len(null_scores)
-        else real_scores.min()
+    real_scores = np.asarray(real_scores, dtype=np.float64)
+    null_scores = np.asarray(null_scores, dtype=np.float64)
+    thresholds = _thresholds_from_scores(
+        real_scores, null_scores, n_thresholds, threshold_grid
     )
-    t_max = (
-        max(real_scores.max(), null_scores.max())
-        if len(null_scores)
-        else real_scores.max()
-    )
-    thresholds = np.linspace(t_min, t_max, n_thresholds)
 
-    n_real = np.array([(real_scores >= t).sum() for t in thresholds], dtype=float)
+    real_sorted = np.sort(real_scores)
+    n_real = len(real_sorted) - np.searchsorted(real_sorted, thresholds, side="left")
+    n_real = n_real.astype(float)
     if len(null_scores) > 0:
-        n_null_total = np.array(
-            [(null_scores >= t).sum() for t in thresholds], dtype=float
+        null_sorted = np.sort(null_scores)
+        n_null_total = len(null_sorted) - np.searchsorted(
+            null_sorted, thresholds, side="left"
         )
+        n_null_total = n_null_total.astype(float)
         n_null = n_null_total / n_shuffle
     else:
         n_null = np.zeros(len(thresholds))

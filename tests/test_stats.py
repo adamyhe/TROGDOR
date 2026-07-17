@@ -24,6 +24,7 @@ sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
 sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
 from chiaroscuro.stats import (
+    compute_fdr,
     score_peaks_from_array,
     select_fdr_threshold,
     shuffle_peaks_within_intervals,
@@ -88,6 +89,48 @@ def test_select_fdr_threshold_returns_lowest_passing_threshold():
 
     assert threshold == pytest.approx(0.3)
     assert n_peaks == 6
+
+
+def test_quantile_fdr_grid_resolves_saturated_tail():
+    real_scores = np.concatenate(
+        [
+            np.linspace(0.25, 0.995, 500),
+            np.array([0.9991, 0.9992, 0.9993, 0.9994, 0.9995]),
+        ]
+    )
+    null_scores = np.concatenate(
+        [
+            np.linspace(0.25, 0.995, 500),
+            np.array([0.9991, 0.9992]),
+        ]
+    )
+
+    linear = compute_fdr(
+        real_scores,
+        null_scores,
+        n_shuffle=1,
+        n_thresholds=5,
+        threshold_grid="linear",
+    )
+    quantile = compute_fdr(
+        real_scores,
+        null_scores,
+        n_shuffle=1,
+        n_thresholds=100,
+        threshold_grid="quantile",
+    )
+
+    linear_threshold, linear_n = select_fdr_threshold(
+        linear[0], linear[1], linear[3], 0.5
+    )
+    quantile_threshold, quantile_n = select_fdr_threshold(
+        quantile[0], quantile[1], quantile[3], 0.5
+    )
+
+    assert linear_threshold == pytest.approx(real_scores.max())
+    assert linear_n == 1
+    assert quantile_threshold < real_scores.max()
+    assert quantile_n > 1
 
 
 def test_default_raw_peak_output_uses_bed_sibling():

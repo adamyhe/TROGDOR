@@ -137,9 +137,12 @@ windows for the null; `--calibration_stat max` or `mean` instead shuffles full
 peak intervals and scores the interval body. Use `--null_scope genome` to
 shuffle within whole chromosomes instead. `--calibrate` currently uses the
 streaming pipeline path and should be run without `--save_bigwig`.
-`--calibration_figure` writes a PNG/PDF/SVG-style figure, depending on the file
-extension accepted by matplotlib, showing real/null score distributions and the
-empirical FDR curve.
+Empirical FDR is evaluated on a tail-enriched `--threshold_grid quantile` grid
+by default, which avoids skipping the saturated high-score tail of TROGDOR
+probabilities. `--calibration_figure` writes a PNG/PDF/SVG-style figure,
+depending on the file extension accepted by matplotlib, showing real/null score
+distributions and the empirical FDR curve on a logit x-axis by default
+(`--calibration_plot_scale logit`).
 
 ### Empirical FDR estimation and `min_score` calibration
 
@@ -161,6 +164,7 @@ trogdor fdr -b mysample.prob.bw -t candidate_peaks.bed.gz --fdr_target 0.05
 | `--stat`        | `max`   | Summary statistic per peak (`max` or `mean`)             |
 | `--n_shuffle`   | `1`     | Independent genome shuffles to average the null over     |
 | `--fdr_target`  | `0.05`  | Target FDR for reporting the score threshold             |
+| `--threshold_grid` | `quantile` | Threshold grid (`quantile`, `linear`, `logit`, or `unique`) |
 | `--output`      | off     | Write TSV table of threshold/FDR/N\_real/N\_null to path |
 | `--figure`      | off     | Save FDR-vs-threshold plot to path                       |
 | `--chroms`      | all     | Restrict to specific chromosomes                         |

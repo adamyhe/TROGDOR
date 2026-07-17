@@ -205,6 +205,18 @@ def cli():
         help="Optional image path for the streamed empirical FDR curve.",
     )
     parser_pipeline.add_argument(
+        "--threshold_grid",
+        choices=["quantile", "linear", "logit", "unique"],
+        default="quantile",
+        help="Threshold grid for empirical FDR evaluation (default: quantile).",
+    )
+    parser_pipeline.add_argument(
+        "--calibration_plot_scale",
+        choices=["logit", "score"],
+        default="logit",
+        help="X-axis scale for --calibration_figure (default: logit).",
+    )
+    parser_pipeline.add_argument(
         "--calibration_stat",
         choices=["summit", "max", "mean"],
         default="summit",
@@ -225,8 +237,8 @@ def cli():
     parser_pipeline.add_argument(
         "--n_thresholds",
         type=int,
-        default=200,
-        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 200).",
+        default=1000,
+        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 1000).",
     )
     parser_pipeline.add_argument(
         "--calibration_seed",
@@ -456,6 +468,18 @@ def cli():
         help="Optional image path for the empirical FDR curve.",
     )
     parser_peaks.add_argument(
+        "--threshold_grid",
+        choices=["quantile", "linear", "logit", "unique"],
+        default="quantile",
+        help="Threshold grid for empirical FDR evaluation (default: quantile).",
+    )
+    parser_peaks.add_argument(
+        "--calibration_plot_scale",
+        choices=["logit", "score"],
+        default="logit",
+        help="X-axis scale for --calibration_figure (default: logit).",
+    )
+    parser_peaks.add_argument(
         "--calibration_stat",
         choices=["summit", "max", "mean"],
         default="summit",
@@ -476,8 +500,8 @@ def cli():
     parser_peaks.add_argument(
         "--n_thresholds",
         type=int,
-        default=200,
-        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 200).",
+        default=1000,
+        help="Number of thresholds in the empirical FDR curve used with --calibrate (default: 1000).",
     )
     parser_peaks.add_argument(
         "--calibration_seed",
@@ -531,8 +555,14 @@ def cli():
     parser_fdr.add_argument(
         "--n_thresholds",
         type=int,
-        default=200,
-        help="Number of evenly-spaced thresholds to evaluate (default: 200)",
+        default=1000,
+        help="Number of thresholds to evaluate (default: 1000)",
+    )
+    parser_fdr.add_argument(
+        "--threshold_grid",
+        choices=["quantile", "linear", "logit", "unique"],
+        default="quantile",
+        help="Threshold grid for empirical FDR evaluation (default: quantile)",
     )
     parser_fdr.add_argument(
         "--output",
