@@ -63,6 +63,8 @@ def _base_peaks_args(bw_path, output, **overrides):
         calibration_fdr_target=0.5,
         calibration_curve=None,
         calibration_figure=None,
+        threshold_grid="quantile",
+        calibration_plot_scale="logit",
         calibration_stat="summit",
         null_scope="genome",
         n_shuffle=5,

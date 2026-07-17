@@ -273,6 +273,15 @@ def _validate_calibration_args(args):
         raise ValueError("--calibration_fdr_target must be in [0, 1].")
     if args.calibration_stat not in {"summit", "max", "mean"}:
         raise ValueError("--calibration_stat must be summit, max, or mean.")
+    if getattr(args, "threshold_grid", "quantile") not in {
+        "quantile",
+        "linear",
+        "logit",
+        "unique",
+    }:
+        raise ValueError("--threshold_grid must be quantile, linear, logit, or unique.")
+    if getattr(args, "calibration_plot_scale", "logit") not in {"logit", "score"}:
+        raise ValueError("--calibration_plot_scale must be logit or score.")
     if getattr(args, "raw_output", None) == args.output:
         raise ValueError("--raw_output must differ from --output.")
 
@@ -318,6 +327,7 @@ def _write_calibration_figure(
     stat,
     fdr_target,
     threshold_at_target,
+    plot_scale="logit",
 ):
     try:
         import matplotlib
@@ -330,6 +340,33 @@ def _write_calibration_figure(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    if plot_scale == "logit":
+        if (
+            min(real_scores.min(), null_scores.min() if len(null_scores) else 1) < 0
+            or max(real_scores.max(), null_scores.max() if len(null_scores) else 0) > 1
+        ):
+            raise ValueError("--calibration_plot_scale logit requires scores in [0, 1].")
+
+        def _plot_x(x):
+            x = np.clip(np.asarray(x, dtype=np.float64), 1e-6, 1 - 1e-6)
+            return np.log(x / (1 - x))
+
+        x_label = f"Logit peak score ({stat})"
+    else:
+        def _plot_x(x):
+            return np.asarray(x, dtype=np.float64)
+
+        x_label = f"Peak score ({stat})"
+
+    real_plot = _plot_x(real_scores)
+    null_plot = _plot_x(null_scores) if len(null_scores) else null_scores
+    thresholds_plot = _plot_x(thresholds)
+    threshold_at_target_plot = (
+        float(_plot_x([threshold_at_target])[0])
+        if not np.isnan(threshold_at_target)
+        else float("nan")
+    )
+
     recall = np.divide(
         n_real,
         len(real_scores),
@@ -341,13 +378,13 @@ def _write_calibration_figure(
     fig.suptitle(f"Empirical calibration ({stat})", fontsize=10)
 
     ax = axes[0]
-    if len(thresholds) > 1 and thresholds[0] != thresholds[-1]:
-        bins = np.linspace(thresholds[0], thresholds[-1], 60)
+    if len(thresholds_plot) > 1 and thresholds_plot[0] != thresholds_plot[-1]:
+        bins = np.linspace(thresholds_plot[0], thresholds_plot[-1], 60)
     else:
-        center = float(thresholds[0]) if len(thresholds) else 0.0
+        center = float(thresholds_plot[0]) if len(thresholds_plot) else 0.0
         bins = np.linspace(center - 0.5, center + 0.5, 20)
     ax.hist(
-        real_scores,
+        real_plot,
         bins=bins,
         density=True,
         alpha=0.6,
@@ -356,7 +393,7 @@ def _write_calibration_figure(
     )
     if len(null_scores) > 0:
         ax.hist(
-            null_scores,
+            null_plot,
             bins=bins,
             density=True,
             alpha=0.5,
@@ -365,19 +402,19 @@ def _write_calibration_figure(
         )
     if not np.isnan(threshold_at_target):
         ax.axvline(
-            threshold_at_target,
+            threshold_at_target_plot,
             color="black",
             linestyle="--",
             linewidth=1,
-            label=f"t={threshold_at_target:.3f}",
+            label=f"t={threshold_at_target:.6g}",
         )
-    ax.set_xlabel(f"Peak score ({stat})")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("Density")
     ax.set_title("Score distributions")
     ax.legend(fontsize=8)
 
     ax = axes[1]
-    ax.plot(thresholds, fdr, color="black", linewidth=1.5, label="FDR")
+    ax.plot(thresholds_plot, fdr, color="black", linewidth=1.5, label="FDR")
     ax.axhline(
         fdr_target,
         color="firebrick",
@@ -387,20 +424,20 @@ def _write_calibration_figure(
     )
     if not np.isnan(threshold_at_target):
         ax.axvline(
-            threshold_at_target,
+            threshold_at_target_plot,
             color="grey",
             linestyle="--",
             linewidth=0.8,
-            label=f"t={threshold_at_target:.3f}",
+            label=f"t={threshold_at_target:.6g}",
         )
-    ax.set_xlabel(f"Score threshold ({stat})")
+    ax.set_xlabel(x_label.replace("Peak score", "Score threshold"))
     ax.set_ylabel("Empirical FDR")
     ax.set_title("FDR and retained fraction")
     ax.set_ylim(0, 1.05)
 
     ax2 = ax.twinx()
     ax2.plot(
-        thresholds,
+        thresholds_plot,
         recall,
         color="steelblue",
         linewidth=1.5,
@@ -704,7 +741,11 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
         raise ValueError("No finite peak scores available for calibration.")
 
     thresholds, n_real, n_null, fdr = compute_fdr(
-        real_scores, null_scores, args.n_shuffle, args.n_thresholds
+        real_scores,
+        null_scores,
+        args.n_shuffle,
+        args.n_thresholds,
+        getattr(args, "threshold_grid", "quantile"),
     )
     threshold_at_target, n_at_target = select_fdr_threshold(
         thresholds, n_real, fdr, args.calibration_fdr_target
@@ -726,6 +767,7 @@ def _run_peaks_calibrated(args, in_bw, chrom_sizes, chrom_intervals, params):
             args.calibration_stat,
             args.calibration_fdr_target,
             threshold_at_target,
+            getattr(args, "calibration_plot_scale", "logit"),
         )
 
     if np.isnan(threshold_at_target):
@@ -1031,6 +1073,7 @@ def cmd_pipeline(args):
             null_scores,
             args.n_shuffle,
             args.n_thresholds,
+            getattr(args, "threshold_grid", "quantile"),
         )
         threshold_at_target, n_at_target = select_fdr_threshold(
             thresholds, n_real, fdr, args.calibration_fdr_target
@@ -1057,6 +1100,7 @@ def cmd_pipeline(args):
                 args.calibration_stat,
                 args.calibration_fdr_target,
                 threshold_at_target,
+                getattr(args, "calibration_plot_scale", "logit"),
             )
 
         if np.isnan(threshold_at_target):
@@ -1141,7 +1185,9 @@ def cmd_fdr(args):
         ``fdr_target`` (float)
             FDR target for reporting the score threshold.
         ``n_thresholds`` (int)
-            Number of evenly-spaced thresholds to evaluate.
+            Number of empirical FDR thresholds to evaluate.
+        ``threshold_grid`` (str)
+            Threshold selection strategy.
         ``output`` (str or None)
             Path to write TSV table of threshold/FDR/N_real/N_null.
         ``figure`` (str or None)
@@ -1195,7 +1241,11 @@ def cmd_fdr(args):
 
     null_scores = np.concatenate(null_score_lists)
     thresholds, n_real, n_null, fdr = compute_fdr(
-        real_scores, null_scores, args.n_shuffle, args.n_thresholds
+        real_scores,
+        null_scores,
+        args.n_shuffle,
+        args.n_thresholds,
+        getattr(args, "threshold_grid", "quantile"),
     )
 
     # ---- Find threshold at FDR target ----
