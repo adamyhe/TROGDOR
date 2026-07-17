@@ -187,18 +187,79 @@ below are motivated by that finding, not by the original geometric concerns.
      coverage support) — but only meaningful once null draws represent
      genuine alternatives, which requires the point above first.
 
-2. **New top priority: lean on independent-ground-truth validation.**
-   `trogdor fdr` against ENCODE SCREEN cCREs / dREG / groHMM calls isn't
-   subject to the tautology above (the comparison isn't defined in terms of
-   the same threshold being tested) and has been available throughout —
-   it's been under-used in favor of chasing self-referential calibration.
-   Treat this as the actual quality bar for the profile caller + `min_score`
-   choice going forward, the same way the original benchmark comparisons in
-   `docs/trogdor_dreg_peak_calling_findings.md` were used before this
-   calibration detour started. The outstanding re-benchmark noted in that
-   doc's "Implementation Status" section (re-running
-   `scripts/benchmark/compare_peaks.py`/`truth_panel.py` and `trogdor fdr`
-   with `--mode profile` against dREG/PINTS/groHMM truth) is this work.
+2. **DONE for G7/K562 groHMM+DNase — independent-ground-truth validation.**
+   Ran on the `peak-geometry` branch using the surviving local assets in
+   `tmp/trogdor/` (`G7.trogdor.prob.bw`, `K562.positive.bed.gz`): `trogdor
+   fdr` produces a genuinely graded FDR curve (threshold 0.522 at FDR=0.05,
+   86.7% of real truth peaks passing) — confirming it is not subject to the
+   candidate-null tautology above. `compare_peaks.py --mode profile` vs.
+   `simple` at the same `min_score=0.95` surfaced a real, actionable finding
+   — see item 2a below — rather than a clean "profile wins" result. GM12878
+   and ENCODE SCREEN/dREG/PINTS comparisons are still outstanding: those
+   assets aren't present locally and need re-downloading via
+   `scripts/data/download_peaks.sh`/`download_test_data.sh`/
+   `download_genome.sh` (or re-scoring a fresh bigWig with `trogdor score`).
+   Treat that as optional follow-on work, not blocking — full details and
+   the metrics table are in `docs/trogdor_dreg_peak_calling_findings.md`'s
+   "Independent-Ground-Truth Validation Results" section.
+
+2a. **FIXED — the `boundary_fraction` default footgun.** The validation run
+    above found `profile` mode, at its CLI defaults (`seed_score=0.5`,
+    `boundary_fraction=0.0`), calls peaks 3.3x wider than `simple` mode's and
+    trails it on bin-level precision/F1/Jaccard by roughly half, with
+    *worse* center-window summit-localization sensitivity (0.594 vs. 0.680)
+    — the opposite of what profile mode's smoothing/valley splitting is
+    supposed to buy. Root cause: `_trim_segment` (`peaks.py`) computed its
+    keep-threshold as `summit_score * boundary_fraction`, but every bin in a
+    segment already cleared the `seed_score` floor during seeding — so
+    trimming was a no-op until `boundary_fraction > seed_score /
+    summit_score`. With the default `seed_score=0.5` and summit scores near
+    1.0, `boundary_fraction` values up to ~`0.5` (confirmed a byte-for-byte
+    no-op) did nothing.
+
+    Fix: `_trim_segment` now interpolates the threshold between `seed_score`
+    (kept as the true, principled no-op at `boundary_fraction=0.0`, since
+    every bin already clears it) and `summit_score`
+    (`boundary_fraction=1.0` keeps only the summit bin(s)):
+    `threshold = seed_score + boundary_fraction * (summit_score -
+    seed_score)`. This makes `boundary_fraction` meaningful across its whole
+    `[0, 1]` range for any `seed_score`/summit-score combination, not just
+    the specific default that happened to break. Verified on the same
+    G7/K562 truth pair: `boundary_fraction=0.5` now actually trims (median
+    width 704bp → 512bp, down from doing nothing) and improves precision
+    0.1121→0.1419, F1 0.1936→0.2360, Jaccard 0.1072→0.1338 relative to the
+    old no-op behavior — sitting between the untrimmed and
+    `boundary_fraction=0.9` numbers as expected on a properly linear scale.
+    Regression tests added in `tests/test_peaks.py`
+    (`test_profile_boundary_fraction_zero_is_true_noop`,
+    `test_profile_boundary_fraction_one_keeps_only_summit`) pin the new
+    semantics at both ends of the range. `profile` mode still trails
+    `simple` mode's raw bin-level precision/F1/Jaccard on this dataset even
+    with trimming fixed — that's a real width/precision trade, not a bug,
+    and users who want `simple`-mode-level bin precision should raise
+    `--boundary_fraction` well above `0.5` (or lower `--seed_score`, since it
+    now directly sets the trim floor). A follow-up sweep pinned the crossover:
+    `boundary_fraction=0.95` matches `simple`'s median width and comes within
+    ~3% of its precision/F1/Jaccard; `boundary_fraction=0.99` overtakes
+    `simple` on precision/F1/Jaccard outright, at the cost of recall dropping
+    below `simple`'s for the first time — see the full sweep table in
+    `docs/trogdor_dreg_peak_calling_findings.md`. `boundary_fraction` spans
+    the same precision/recall trade-off `simple`'s fixed threshold sits one
+    point on, so "best" depends on what's being optimized for.
+
+    **Decision: the CLI default for `--boundary_fraction` on both `peaks`
+    and `pipeline` is now `0.95`** (changed from `0.0`), chosen as the best
+    overall compromise on bin- and peak-level quality metrics together —
+    matches `simple` mode's width/precision closely while keeping `profile`
+    mode's peak PPV/center-window-specificity edge. The `_peak_params`/
+    `_run_with_bigwig` `getattr(args, "boundary_fraction", ...)` fallbacks in
+    `cli/commands.py` were updated to the same value for consistency. The
+    library-level default in `call_profile_peaks` (`peaks.py`) deliberately
+    stays at `0.0` — several unit tests in `tests/test_peaks.py` call it
+    without specifying `boundary_fraction` to isolate seeding/splitting
+    behavior from trimming, so the function itself keeps the conservative,
+    easy-to-reason-about no-op default; only the CLI's product-facing
+    default changed.
 
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the

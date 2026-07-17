@@ -141,11 +141,60 @@ def test_profile_boundary_fraction_trims_low_shoulders():
         intervals,
         min_score=0.95,
         seed_score=0.4,
-        boundary_fraction=0.75,
+        boundary_fraction=0.5,
     )
 
     assert len(peaks) == 1
     assert peaks[0]["start"] == 10
+    assert peaks[0]["end"] == 40
+
+
+def test_profile_boundary_fraction_zero_is_true_noop():
+    # Regression test: the trim threshold used to be summit_score *
+    # boundary_fraction, anchored at 0 instead of seed_score. Every bin in a
+    # segment already clears seed_score during seeding, so that made
+    # boundary_fraction values well above 0 a silent no-op too (e.g. 0.5 with
+    # seed_score=0.4 and summit_score=1.0 computed threshold=0.5, keeping
+    # everything anyway). Anchoring at seed_score makes boundary_fraction=0
+    # the *only* no-op, and the rest of the range does real trimming.
+    intervals = [
+        (0, 10, 0.5),
+        (10, 20, 0.8),
+        (20, 30, 1.0),
+        (30, 40, 0.7),
+        (40, 50, 0.4),
+    ]
+
+    peaks = call_profile_peaks(
+        intervals,
+        min_score=0.95,
+        seed_score=0.4,
+        boundary_fraction=0.0,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["start"] == 0
+    assert peaks[0]["end"] == 50
+
+
+def test_profile_boundary_fraction_one_keeps_only_summit():
+    intervals = [
+        (0, 10, 0.5),
+        (10, 20, 0.8),
+        (20, 30, 1.0),
+        (30, 40, 0.7),
+        (40, 50, 0.4),
+    ]
+
+    peaks = call_profile_peaks(
+        intervals,
+        min_score=0.95,
+        seed_score=0.4,
+        boundary_fraction=1.0,
+    )
+
+    assert len(peaks) == 1
+    assert peaks[0]["start"] == 20
     assert peaks[0]["end"] == 30
 
 

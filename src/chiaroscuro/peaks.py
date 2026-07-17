@@ -134,10 +134,21 @@ def _segments_from_valleys(block, scores, min_score, valley_fraction):
     return segments
 
 
-def _trim_segment(block, start_i, end_i, boundary_fraction):
+def _trim_segment(block, start_i, end_i, seed_score, boundary_fraction):
+    """Trim a segment's low-confidence shoulders.
+
+    The keep-threshold interpolates between ``seed_score`` (every bin in the
+    segment already cleared this during seeding, so ``boundary_fraction=0``
+    is a true no-op) and the segment's own summit score
+    (``boundary_fraction=1`` keeps only bins at the summit). Anchoring at
+    ``seed_score`` instead of ``0`` keeps ``boundary_fraction`` meaningful
+    across its whole range regardless of how far ``seed_score`` sits below
+    the summit — anchoring at ``0`` made most of the range a no-op whenever
+    the summit was much higher than ``seed_score``.
+    """
     segment = block[start_i : end_i + 1]
     summit_score = max(v for _, _, v in segment)
-    threshold = summit_score * boundary_fraction
+    threshold = seed_score + boundary_fraction * (summit_score - seed_score)
     keep = [i for i in range(start_i, end_i + 1) if block[i][2] >= threshold]
     if not keep:
         return start_i, end_i
@@ -248,7 +259,9 @@ def call_profile_peaks(
         for start_i, end_i in _segments_from_valleys(
             block, smooth, min_score, valley_fraction
         ):
-            start_i, end_i = _trim_segment(block, start_i, end_i, boundary_fraction)
+            start_i, end_i = _trim_segment(
+                block, start_i, end_i, seed_score, boundary_fraction
+            )
             peak = _peak_from_bins(block[start_i : end_i + 1])
             width = peak["end"] - peak["start"]
             if width < min_width:
