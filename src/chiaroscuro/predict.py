@@ -315,6 +315,36 @@ def _prefetch_worker(pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_si
         q.put(None)  # sentinel
 
 
+def _select_chroms_to_score(chroms_to_score, chrom_sizes, chunk_size):
+    """Filter to chromosomes present in the bigWig and >= chunk_size.
+
+    Chromosomes absent from the bigWig each warn individually. Chromosomes
+    shorter than ``chunk_size`` are collected and reported in a single
+    warning, rather than one warning per short chromosome.
+    """
+    valid_chroms = []
+    short_chroms = []
+    for chrom in chroms_to_score:
+        if chrom not in chrom_sizes:
+            warnings.warn(f"Skipping {chrom}: not in bigWig")
+            continue
+        if chrom_sizes[chrom] < chunk_size:
+            short_chroms.append((chrom, chrom_sizes[chrom]))
+            continue
+        valid_chroms.append(chrom)
+
+    if short_chroms:
+        min_short_len = min(length for _, length in short_chroms)
+        chrom_list = ", ".join(f"{chrom} ({length} bp)" for chrom, length in short_chroms)
+        warnings.warn(
+            f"Skipping {len(short_chroms)} chromosome(s) shorter than chunk_size "
+            f"{chunk_size}: {chrom_list}. Re-run with chunk_size <= {min_short_len} "
+            "to score all of them."
+        )
+
+    return valid_chroms
+
+
 def predict_genome(
     model,
     pl_bigwig,
@@ -380,19 +410,7 @@ def predict_genome(
     _pl_bw.close()
 
     chroms_to_score = chroms if chroms is not None else list(chrom_sizes.keys())
-
-    valid_chroms = []
-    for chrom in chroms_to_score:
-        if chrom not in chrom_sizes:
-            warnings.warn(f"Skipping {chrom}: not in bigWig")
-            continue
-        if chrom_sizes[chrom] < chunk_size:
-            warnings.warn(
-                f"Skipping {chrom}: length {chrom_sizes[chrom]} bp is shorter than "
-                f"chunk_size {chunk_size}. Re-run with chunk_size <= {chrom_sizes[chrom]} to score it."
-            )
-            continue
-        valid_chroms.append(chrom)
+    valid_chroms = _select_chroms_to_score(chroms_to_score, chrom_sizes, chunk_size)
 
     # Prepare model once before the prefetch loop
     model = model.to(device).eval()
