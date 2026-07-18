@@ -2,11 +2,13 @@
 Tests for predict_chromosome().
 """
 
+import warnings
+
 import pytest
 import torch
 import torch.nn as nn
 
-from chiaroscuro.predict import predict_chromosome
+from chiaroscuro.predict import _select_chroms_to_score, predict_chromosome
 
 # ---------------------------------------------------------------------------
 # Minimal mock models for testing
@@ -344,3 +346,47 @@ class TestPredictChromosome:
         )
         assert out.shape == (1, 4096 // 16)
         assert not torch.isnan(out).any()
+
+
+class TestSelectChromsToScore:
+    """Tests for _select_chroms_to_score()'s filtering and warning behavior."""
+
+    def test_keeps_chroms_at_or_above_chunk_size(self):
+        chrom_sizes = {"chr1": 1000, "chr2": 500}
+        valid = _select_chroms_to_score(["chr1", "chr2"], chrom_sizes, chunk_size=500)
+        assert valid == ["chr1", "chr2"]
+
+    def test_short_chroms_collapse_into_one_warning(self):
+        chrom_sizes = {"chr1": 1000, "chr2": 100, "chr3": 200}
+        with pytest.warns(UserWarning) as record:
+            valid = _select_chroms_to_score(
+                ["chr1", "chr2", "chr3"], chrom_sizes, chunk_size=500
+            )
+        assert valid == ["chr1"]
+        short_warnings = [
+            w for w in record.list if "shorter than chunk_size" in str(w.message)
+        ]
+        assert len(short_warnings) == 1
+        message = str(short_warnings[0].message)
+        assert "chr2 (100 bp)" in message
+        assert "chr3 (200 bp)" in message
+        assert "2 chromosome(s)" in message
+        # Suggested chunk_size must be small enough to score ALL short
+        # chroms, i.e. the smallest of them (100), not the largest (200).
+        assert "chunk_size <= 100" in message
+
+    def test_missing_chrom_warns_individually_not_collected(self):
+        chrom_sizes = {"chr1": 1000}
+        with pytest.warns(UserWarning) as record:
+            valid = _select_chroms_to_score(["chr1", "chrX"], chrom_sizes, chunk_size=500)
+        assert valid == ["chr1"]
+        assert len(record.list) == 1
+        assert "chrX" in str(record.list[0].message)
+        assert "not in bigWig" in str(record.list[0].message)
+
+    def test_no_warning_when_all_chroms_pass(self):
+        chrom_sizes = {"chr1": 1000, "chr2": 2000}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            valid = _select_chroms_to_score(["chr1", "chr2"], chrom_sizes, chunk_size=500)
+        assert valid == ["chr1", "chr2"]
