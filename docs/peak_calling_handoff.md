@@ -182,10 +182,13 @@ below are motivated by that finding, not by the original geometric concerns.
      every peak globally), so null draws land on *other* real peaks. Breaks
      the ceiling tautology, but becomes a relative-rank/triage measure, not
      a strict FDR.
-   - A richer multi-feature split/merge/null-comparison decision (dREG's
-     random-forest role — valley depth, width, local candidate density,
-     coverage support) — but only meaningful once null draws represent
-     genuine alternatives, which requires the point above first.
+   - A richer multi-feature split/merge decision (dREG's random-forest role
+     — valley depth, width, local candidate density, coverage support). This
+     bullet originally tied it to null-comparison/calibration, which is now
+     closed for good — but the split/merge decision itself is pure peak
+     geometry (replacing `_segments_from_valleys`'s single `valley_fraction`
+     threshold), not inherently a calibration concept, so it doesn't need to
+     wait on anything above. Promoted to its own active item — see 2c below.
 
 2. **DONE for G7/K562 groHMM+DNase — independent-ground-truth validation.**
    Ran on the `peak-geometry` branch using the surviving local assets in
@@ -276,23 +279,36 @@ below are motivated by that finding, not by the original geometric concerns.
     if `args` is ever missing the attribute, but should still match what the
     CLI itself defaults to.
 
-2b. **New: GM12878 still trails dREG on recall — test `--seed_score` next,
-    not `--min_score`.** At `profile` defaults, GM12878 vs. `GM12878.positive`
-    beats dREG on precision/F1/Jaccard but trails on recall/sensitivity
-    (0.671/0.776 vs. dREG's 0.852/0.870). Lowering `--min_score` to `0.9`
-    (everything else default) was tried and made things worse — 44% more
-    candidate peaks for ~1-2 points of recall, at the cost of falling back
-    below dREG on precision/F1/Jaccard too. Root cause: `seed_score` defaults
-    to `min(min_score, 0.5)`, which is `0.5` at both `min_score=0.95` and
-    `0.9` — candidate-block seeding never actually changed between those two
-    runs, only the final acceptance gate did. Per-bin ROC on this exact pair
-    (`scripts/benchmark/_results/benchmarks.txt`) shows TPR still climbing to
-    94.5% at threshold≈0.46 (FPR=5%) — there's real signal available well
-    below the current `seed_score=0.5` floor. Next step: explicitly lower
-    `--seed_score` (not `--min_score`) and re-check peak-level
-    recall/sensitivity against dREG. See
-    `docs/trogdor_dreg_peak_calling_findings.md`'s "GM12878 Recall Gap vs.
-    dREG" section for the full numbers. Not yet run.
+2b. **DONE — GM12878 `seed_score` sweep: `0.3` is the best single-threshold
+    trade found, but a single threshold can't close the rest of the gap to
+    dREG.** Swept `seed_score` ∈ {0.3, 0.1, 0.0} (`min_score`/
+    `boundary_fraction` held at default). `seed_score=0.3` gives a real,
+    favorably-priced recall gain (peak sensitivity 0.776→0.797, bin recall
+    0.671→0.710) for a modest precision cost — clearly better-behaved than
+    the earlier `min_score=0.9` attempt. `seed_score=0.0` is pathological
+    (bin precision collapses to 0.0147 while candidate peak *count* stays
+    identical to `0.3`/`0.1` — a handful of calls likely blew up to
+    chromosome-scale width; do not use it). Even at the best-behaved
+    aggressive point tested (`0.1`), recall/sensitivity remain well short of
+    dREG's (0.738/0.814 vs. 0.852/0.870), while F1/Jaccard have already
+    fallen to parity with dREG — diminishing returns setting in. Conclusion:
+    recommend `seed_score=0.3` as the practical default-candidate for
+    GM12878-like data, but reaching dREG's recall needs a richer decision
+    rule than any single global threshold, not further threshold tuning.
+    Full sweep table in `docs/trogdor_dreg_peak_calling_findings.md`'s
+    "GM12878 Recall Gap vs. dREG" section.
+
+2c. **ACTIVE — richer multi-feature split/merge decision (promoted from
+    item 1's old calibration-adjacent bullet).** dREG uses a random forest
+    over valley depth, width, local candidate density, and coverage support
+    to decide whether adjacent local maxima split into separate peaks or
+    merge into one; TROGDOR's `_segments_from_valleys` (`peaks.py`) uses a
+    single fixed `valley_fraction` threshold on valley depth alone. This is
+    pure peak geometry — no calibration/null machinery involved — so it can
+    be prototyped directly. Motivated by 2b: dREG's edge is in recall/
+    sensitivity, and it's plausible that's coming from smarter split/merge
+    decisions (denser, more localized calls) rather than from a different
+    threshold philosophy. Currently being planned/prototyped.
 
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the
