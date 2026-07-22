@@ -477,6 +477,59 @@ recall is an acceptable cost. There is no single "best" `boundary_fraction`
 independent of what the caller is optimizing for; `min_score`/`seed_score`
 retuning was not explored in this sweep and would shift the curve further.
 
+## GM12878 Recall Gap vs. dREG: Not a Raw-Model Ceiling — `seed_score` Was Never Actually Lowered (2026-07-18)
+
+Running `profile` mode (defaults: `seed_score=0.5`, `boundary_fraction=0.95`)
+against GM12878/`GM12878.positive` (groHMM+DNase) landed at bin precision
+0.2223/recall 0.6711/F1 0.3339/Jaccard 0.2004 — ahead of dREG on
+precision/F1/Jaccard (dREG: 0.1784/0.2951/0.1731) but behind on recall (dREG:
+0.8523) and peak-level sensitivity (0.7759 vs. dREG's 0.8700).
+
+**First attempt to close the gap — lowering `--min_score` to `0.9`, everything
+else default — was a bad trade, not a step toward dREG:** candidate peaks
+grew 44% (70,341 → 101,583) for only ~1-2 points of recall/sensitivity
+(0.6711→0.6818 bin recall; 0.7759→0.7980 peak sensitivity), while precision
+fell hard (0.2223→0.1877, PPV 0.3502→0.2503, center-window specificity
+0.3405→0.2454) — enough to fall back *below* dREG on precision/F1/Jaccard,
+giving up the one advantage the default had, for essentially no recall gain.
+
+**This looked at first like a raw-model sensitivity ceiling — it isn't.**
+`scripts/benchmark/_results/benchmarks.txt`'s per-bin ROC for `TROGDOR.torch`
+on this exact GM12878/`GM12878.positive` pair:
+
+| FPR | TPR | Threshold |
+| --- | --- | --- |
+| 0.1% | 40.6% | 0.9919 |
+| 1.0% | 78.2% | 0.8888 |
+| 5.0% | 94.5% | 0.4608 |
+| 10.0% | 97.0% | 0.2736 |
+
+The `min_score=0.9` row (threshold≈0.9005) shows TPR=76.8%/FPR=0.91% in the
+same table — consistent with the 0.798 peak-level sensitivity measured above,
+confirming the numbers line up. But TPR keeps climbing sharply below that
+threshold (94.5% at threshold≈0.46, FPR=5%) — the model has plenty of real
+signal on true positive bins still to give; it is not saturated at the
+thresholds `profile` mode's default is operating at.
+
+**Root cause of why lowering `min_score` alone did almost nothing: `seed_score`
+never changed.** `seed_score` defaults to `min(min_score, 0.5)`. At
+`min_score=0.95` *and* `min_score=0.9`, that resolves to the same `0.5` —
+candidate-block *seeding* (what region is even considered before
+valley-splitting/trimming) was identical in both runs. Lowering `min_score`
+only moved the final summit-acceptance gate; it cannot recover signal that
+seeding never included in a candidate block to begin with. This is the same
+`resolve_seed_score` behavior documented in `peaks.py`, working exactly as
+designed — the mistake was tuning `min_score` while expecting it to also
+move `seed_score`.
+
+**Next thing to actually test**: explicitly lower `--seed_score` below `0.5`
+(not `--min_score`) on GM12878, since the ROC table shows real signal is
+available at least down to threshold≈0.46. This widens candidate blocks into
+weaker-but-real territory that seeding currently excludes outright;
+`boundary_fraction`/valley-splitting then decide how much of that survives as
+a final call — the mechanism actually capable of moving peak-level
+recall/sensitivity toward dREG's, unlike `min_score` alone. Not yet run.
+
 ## Sources Checked
 
 - Danko-Lab dREG README:
