@@ -276,6 +276,24 @@ below are motivated by that finding, not by the original geometric concerns.
     if `args` is ever missing the attribute, but should still match what the
     CLI itself defaults to.
 
+2b. **New: GM12878 still trails dREG on recall — test `--seed_score` next,
+    not `--min_score`.** At `profile` defaults, GM12878 vs. `GM12878.positive`
+    beats dREG on precision/F1/Jaccard but trails on recall/sensitivity
+    (0.671/0.776 vs. dREG's 0.852/0.870). Lowering `--min_score` to `0.9`
+    (everything else default) was tried and made things worse — 44% more
+    candidate peaks for ~1-2 points of recall, at the cost of falling back
+    below dREG on precision/F1/Jaccard too. Root cause: `seed_score` defaults
+    to `min(min_score, 0.5)`, which is `0.5` at both `min_score=0.95` and
+    `0.9` — candidate-block seeding never actually changed between those two
+    runs, only the final acceptance gate did. Per-bin ROC on this exact pair
+    (`scripts/benchmark/_results/benchmarks.txt`) shows TPR still climbing to
+    94.5% at threshold≈0.46 (FPR=5%) — there's real signal available well
+    below the current `seed_score=0.5` floor. Next step: explicitly lower
+    `--seed_score` (not `--min_score`) and re-check peak-level
+    recall/sensitivity against dREG. See
+    `docs/trogdor_dreg_peak_calling_findings.md`'s "GM12878 Recall Gap vs.
+    dREG" section for the full numbers. Not yet run.
+
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the
    prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
