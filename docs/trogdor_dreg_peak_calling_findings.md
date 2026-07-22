@@ -530,6 +530,46 @@ weaker-but-real territory that seeding currently excludes outright;
 a final call — the mechanism actually capable of moving peak-level
 recall/sensitivity toward dREG's, unlike `min_score` alone. Not yet run.
 
+**Ran it — `seed_score` sweep at 0.3/0.1/0.0, `min_score`/`boundary_fraction`
+held at default:**
+
+| seed_score | candidates | bin P | bin R | bin F1 | bin Jaccard | peak sens. | peak PPV | mean GT cov. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.5 (default) | 70,341 | 0.2223 | 0.6711 | 0.3339 | 0.2004 | 0.7759 | 0.3502 | 0.6643 |
+| 0.3 | 70,015 | 0.2023 | 0.7102 | 0.3149 | 0.1868 | 0.7971 | 0.3547 | 0.7027 |
+| 0.1 | 70,015 | 0.1842 | 0.7384 | 0.2948 | 0.1729 | 0.8143 | 0.3580 | 0.7308 |
+| 0.0 | 70,015 | 0.0147 | 0.7590 | 0.0288 | 0.0146 | 0.8307 | 0.3625 | 0.7518 |
+| dREG | 71,411 | 0.1784 | 0.8523 | 0.2951 | 0.1731 | 0.8700 | 0.4339 | 0.8352 |
+
+`seed_score=0.0` is pathological, not just a further point on the curve:
+precision collapses an order of magnitude (0.2223→0.0147) while the
+*candidate peak count is identical* (70,015) at 0.3, 0.1, and 0.0 — same
+number of discrete intervals, wildly different bin-level footprint. Since
+sigmoid outputs are always `>0`, `seed_score=0.0` means every scored bin
+passes seeding, which likely collapses whole chromosomes into a handful of
+giant candidate blocks that valley-splitting/boundary-trimming can't cleanly
+carve individual peaks back out of. Do not use `seed_score=0.0`; not
+investigated further (would need to inspect the resulting BED's width
+distribution to confirm the mechanism, but the direction — avoid it — is
+already clear from the metrics alone).
+
+Returns diminish, then go negative, as `seed_score` drops: 0.5→0.3 bought
++0.039 recall for −0.020 precision; 0.3→0.1 bought +0.028 recall for −0.018
+precision; 0.1→0.0 bought +0.021 recall for a −0.170 precision collapse. Even
+at the best-behaved aggressive point (`0.1`), peak sensitivity (0.8143) and
+recall (0.7384) remain well short of dREG's (0.8700/0.8523), while F1/Jaccard
+have already fallen to roughly tied with dREG (0.2948 vs. 0.2951; 0.1729 vs.
+0.1731). **Conclusion: `seed_score=0.3` is the best point found on this
+curve** — a real recall/sensitivity gain over default at a modest, favorable
+precision cost, clearly better-behaved than the earlier `min_score=0.9`
+attempt. But `seed_score` alone cannot reach dREG's recall without giving up
+precision-parity entirely; a single global threshold is the wrong tool to
+close the rest of this gap. dREG's extra recall most likely comes from its
+per-candidate, multi-feature (valley depth, width, local density) split/merge
+decision — a fundamentally richer rule than any single scalar threshold —
+which is the direction to pursue next (see
+`docs/peak_calling_handoff.md`'s multi-feature split/merge item).
+
 ## Sources Checked
 
 - Danko-Lab dREG README:

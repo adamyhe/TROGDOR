@@ -15,7 +15,15 @@ sys.modules.setdefault("torcheval", torcheval)
 sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
 sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
-from chiaroscuro.peaks import call_peaks, call_profile_peaks, resolve_seed_score
+from chiaroscuro.peaks import (
+    FEATURE_NAMES,
+    _pairwise_features,
+    call_peaks,
+    call_profile_peaks,
+    resolve_seed_score,
+)
+
+FEATURE_NAMES_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
 
 def test_adjacent_bins_merge():
@@ -250,3 +258,48 @@ def test_invalid_profile_parameters_raise():
         call_profile_peaks([], boundary_fraction=-0.1)
     with pytest.raises(ValueError, match="smooth_bins"):
         call_profile_peaks([], smooth_bins=0)
+
+
+class TestPairwiseFeatures:
+    """Tests for _pairwise_features()'s dREG-equivalent feature extraction."""
+
+    def test_basic_asymmetric_pair(self):
+        block = [(0, 10, 0.5), (10, 20, 0.9), (20, 30, 0.3), (30, 40, 0.2), (40, 50, 0.8)]
+        scores = [0.5, 0.9, 0.3, 0.2, 0.8]
+
+        features = _pairwise_features(block, scores, left=1, valley_i=3, right=4)
+
+        dist, r1, r2, y1, y2, maxy, d1, d2, d3, dr = features
+        assert dist == pytest.approx(30.0)
+        assert r1 == pytest.approx(20.0)
+        assert r2 == pytest.approx(10.0)
+        assert y1 == pytest.approx(0.9)
+        assert y2 == pytest.approx(0.8)
+        assert maxy == pytest.approx(0.9)
+        assert d1 == pytest.approx(0.1)
+        assert d2 == pytest.approx(0.6)
+        assert d3 == pytest.approx(0.2)
+        assert dr == pytest.approx(2.0)
+
+    def test_dr_divide_by_zero_guard(self):
+        # y1 == y2 (d1=0) and valley_score == 0 (d3=0) -> denom == 0.
+        block = [(0, 10, 0.0), (10, 20, 0.0), (20, 30, 0.0)]
+        scores = [0.5, 0.0, 0.5]
+
+        features = _pairwise_features(block, scores, left=0, valley_i=1, right=2)
+
+        dr = features[FEATURE_NAMES_INDEX["dr"]]
+        assert dr == pytest.approx(0.0)
+
+    def test_d2_clipped_when_valley_exceeds_weaker_summit(self):
+        # Valley score (0.5) higher than the weaker summit (0.3) -- a
+        # degenerate/adversarial case a smoothing artifact could produce.
+        # Without clipping, d2 would be negative (0.3 - 0.5 = -0.2).
+        block = [(0, 10, 0.0), (10, 20, 0.0), (20, 30, 0.0)]
+        scores = [0.3, 0.5, 0.9]
+
+        features = _pairwise_features(block, scores, left=0, valley_i=1, right=2)
+
+        d2 = features[FEATURE_NAMES_INDEX["d2"]]
+        assert d2 == pytest.approx(0.0)
+        assert d2 >= 0.0

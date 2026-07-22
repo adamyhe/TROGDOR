@@ -102,6 +102,33 @@ def _local_maxima(scores):
     return [max(range(len(scores)), key=lambda i: scores[i])]
 
 
+FEATURE_NAMES = ("dist", "r1", "r2", "y1", "y2", "maxy", "d1", "d2", "d3", "dr")
+
+
+def _pairwise_features(block, scores, left, valley_i, right):
+    """Return the 10 dREG-equivalent split/merge features for one adjacent
+    summit pair, in ``FEATURE_NAMES`` order.
+
+    ``block`` gives real bp coordinates (its raw score, position 2, is not
+    used here); ``scores`` is the smoothed score list, index-aligned with
+    ``block`` — matching ``_segments_from_valleys``'s existing convention of
+    computing valley depth on smoothed scores, not raw ones.
+    """
+    x_left, x_right, x_valley = block[left][0], block[right][0], block[valley_i][0]
+    y1, y2, valley_score = scores[left], scores[right], scores[valley_i]
+
+    dist = float(x_right - x_left)
+    r1 = float(x_valley - x_left)
+    r2 = float(x_right - x_valley)
+    maxy = max(y1, y2)
+    d1 = abs(y1 - y2)
+    d2 = max(0.0, min(y1, y2) - valley_score)
+    d3 = valley_score
+    denom = d1 + d3
+    dr = d2 / denom if denom > 1e-9 else 0.0
+    return (dist, r1, r2, y1, y2, maxy, d1, d2, d3, dr)
+
+
 def _segments_from_valleys(block, scores, min_score, valley_fraction):
     summit_idxs = [i for i in _local_maxima(scores) if block[i][2] >= min_score]
     if not summit_idxs:
