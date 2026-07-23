@@ -169,6 +169,94 @@ def _export_forest(clf, feature_names):
     print("]")
 
 
+def _print_separability(X, y, feature_names, title):
+    """Print per-feature min/mean/max by class, flagging features with no
+    overlap between merge and split -- a red flag that the classifier is
+    exploiting a labeling-rule artifact (e.g. distance confound) rather than
+    genuine valley-shape signal.
+    """
+    print(f"\n--- {title} ---")
+    print(f"{'Feature':<8} {'merge min/mean/max':>28} {'split min/mean/max':>28} {'overlap?':>9}")
+    merge_mask, split_mask = y == 0, y == 1
+    for j, name in enumerate(feature_names):
+        m, s = X[merge_mask, j], X[split_mask, j]
+        if len(m) == 0 or len(s) == 0:
+            print(f"{name:<8} {'(one class empty)':>28} {'':>28} {'':>9}")
+            continue
+        m_range = f"{m.min():.4g}/{m.mean():.4g}/{m.max():.4g}"
+        s_range = f"{s.min():.4g}/{s.mean():.4g}/{s.max():.4g}"
+        overlap = "no" if (m.max() < s.min() or s.max() < m.min()) else "yes"
+        print(f"{name:<8} {m_range:>28} {s_range:>28} {overlap:>9}")
+
+
+def _build_candidates(args):
+    return {
+        "LogisticRegression": (
+            LogisticRegression(
+                C=args.lr_C,
+                class_weight="balanced",
+                max_iter=1000,
+                random_state=args.seed,
+            ),
+            True,
+        ),
+        f"DecisionTree(depth={args.tree_max_depth})": (
+            DecisionTreeClassifier(
+                max_depth=args.tree_max_depth,
+                min_samples_leaf=args.min_samples_leaf,
+                class_weight="balanced",
+                random_state=args.seed,
+            ),
+            False,
+        ),
+        f"RandomForest(n={args.n_estimators},depth={args.max_depth})": (
+            RandomForestClassifier(
+                n_estimators=args.n_estimators,
+                max_depth=args.max_depth,
+                min_samples_leaf=args.min_samples_leaf,
+                class_weight="balanced",
+                random_state=args.seed,
+            ),
+            False,
+        ),
+    }
+
+
+def _fit_and_compare(X_train, y_train, X_val, y_val, args, title):
+    """Fit LR/tree/RF on (X_train, y_train), evaluate on (X_val, y_val), print
+    a comparison table. Returns {name: (clf, needs_scaling, f1)}, or None if
+    either split is empty/single-class (nothing meaningful to fit/evaluate).
+    """
+    print(f"\n--- {title} ---")
+    if len(y_val) == 0 or len(set(y_val.tolist())) < 2:
+        print("Skipped: held-out subset is empty or single-class.")
+        return None
+    if len(y_train) == 0 or len(set(y_train.tolist())) < 2:
+        print("Skipped: train subset is empty or single-class.")
+        return None
+
+    # LogisticRegression needs standardized features for numerical stability
+    # (raw feature scales range from bp distances in the thousands down to
+    # probability-scale values in [0,1], which otherwise overflows the
+    # solver). Tree-based models are scale-invariant and use raw features.
+    scaler = StandardScaler().fit(X_train)
+    X_train_scaled = scaler.transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+
+    candidates = _build_candidates(args)
+    print(f"{'Model':<32} {'Precision':>10} {'Recall':>10} {'F1':>10}")
+    results = {}
+    for name, (clf, scale) in candidates.items():
+        clf.fit(X_train_scaled if scale else X_train, y_train)
+        pred = clf.predict(X_val_scaled if scale else X_val)
+        p, r, f1, _ = precision_recall_fscore_support(
+            y_val, pred, average="binary", zero_division=0
+        )
+        results[name] = (clf, scale, f1)
+        print(f"{name:<32} {p:>10.4f} {r:>10.4f} {f1:>10.4f}")
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -305,6 +393,14 @@ def main():
           f"({diag_blocks_ge3 / max(diag_blocks_total, 1):.1%}) "
           "-- sizes the risk of skipping dREG's iterative re-merge loop")
 
+    _print_separability(
+        X, y, FEATURE_NAMES,
+        "Per-feature separability, ALL labeled pairs (a merge/split range "
+        "with no overlap means that single feature alone already perfectly "
+        "separates the classes -- a red flag that the *excluded* 96%+ "
+        "ambiguous pairs, not this kept subset, are the real test)",
+    )
+
     if len(y_val) == 0 or len(set(y_val.tolist())) < 2:
         raise SystemExit(
             "Held-out set is empty or single-class; pick --val_chroms with "
@@ -321,57 +417,67 @@ def main():
             "full G1-G6 set, not one replicate)."
         )
 
-    # LogisticRegression needs standardized features for numerical stability
-    # (raw feature scales range from bp distances in the thousands down to
-    # probability-scale values in [0,1], which otherwise overflows the
-    # solver). Tree-based models are scale-invariant and use raw features.
-    scaler = StandardScaler().fit(X_train)
-    X_train_scaled = scaler.transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
+    results = _fit_and_compare(
+        X_train, y_train, X_val, y_val, args,
+        "Held-out (chromosome-split) comparison, ALL labeled pairs",
+    )
 
-    candidates = {
-        "LogisticRegression": (
-            LogisticRegression(
-                C=args.lr_C,
-                class_weight="balanced",
-                max_iter=1000,
-                random_state=args.seed,
-            ),
-            True,
-        ),
-        f"DecisionTree(depth={args.tree_max_depth})": (
-            DecisionTreeClassifier(
-                max_depth=args.tree_max_depth,
-                min_samples_leaf=args.min_samples_leaf,
-                class_weight="balanced",
-                random_state=args.seed,
-            ),
-            False,
-        ),
-        f"RandomForest(n={args.n_estimators},depth={args.max_depth})": (
-            RandomForestClassifier(
-                n_estimators=args.n_estimators,
-                max_depth=args.max_depth,
-                min_samples_leaf=args.min_samples_leaf,
-                class_weight="balanced",
-                random_state=args.seed,
-            ),
-            False,
-        ),
-    }
-
-    print("\n--- Held-out (chromosome-split) comparison ---")
-    print(f"{'Model':<32} {'Precision':>10} {'Recall':>10} {'F1':>10}")
-    results = {}
-    for name, (clf, scale) in candidates.items():
-        clf.fit(X_train_scaled if scale else X_train, y_train)
-        pred = clf.predict(X_val_scaled if scale else X_val)
-        p, r, f1, _ = precision_recall_fscore_support(
-            y_val, pred, average="binary", zero_division=0
+    # Distance-matched control: `dist` (and its correlates r1/r2/d2/d3/dr)
+    # can be a trivial-separability artifact of the labeling rule itself
+    # (merge = both summits inside one truth interval, bounding how far
+    # apart they can be; split = summits span two distinct intervals, which
+    # tends to mean they're far apart) -- not genuine valley-shape signal.
+    # Restricting to the dist range where both classes actually overlap
+    # forces the classifier to use the remaining features instead.
+    dist_idx = FEATURE_NAMES.index("dist")
+    dist = X[:, dist_idx]
+    merge_mask, split_mask = y == 0, y == 1
+    m_dist, s_dist = dist[merge_mask], dist[split_mask]
+    overlap_lo = max(m_dist.min(), s_dist.min())
+    overlap_hi = min(m_dist.max(), s_dist.max())
+    print(
+        f"\n--- Distance-matched control (merge dist=[{m_dist.min():.4g}, "
+        f"{m_dist.max():.4g}], split dist=[{s_dist.min():.4g}, {s_dist.max():.4g}]) ---"
+    )
+    if overlap_lo > overlap_hi:
+        print(
+            "No overlap in `dist` between classes at all -- every kept pair "
+            "is trivially separable by distance alone. This confirms the "
+            "labeling rule's classes are distance-confounded by construction "
+            "for this run; the held-out F1 above reflects that confound, not "
+            "necessarily genuine valley-shape signal. Skipping the "
+            "distance-matched fit -- there is no data left once distance is "
+            "controlled for."
         )
-        results[name] = (clf, scale, f1)
-        print(f"{name:<32} {p:>10.4f} {r:>10.4f} {f1:>10.4f}")
+    else:
+        band_mask = (dist >= overlap_lo) & (dist <= overlap_hi)
+        Xb, yb, is_val_b = X[band_mask], y[band_mask], is_val[band_mask]
+        print(
+            f"Overlap band: dist in [{overlap_lo:.4g}, {overlap_hi:.4g}] -- "
+            f"{int(band_mask.sum())} pairs ({int((yb == 0).sum())} merge, "
+            f"{int((yb == 1).sum())} split)"
+        )
+        _print_separability(
+            Xb, yb, FEATURE_NAMES,
+            "Per-feature separability WITHIN the distance-matched band",
+        )
+        band_results = _fit_and_compare(
+            Xb[~is_val_b], yb[~is_val_b], Xb[is_val_b], yb[is_val_b], args,
+            "Held-out comparison WITHIN distance-matched band "
+            "(tests for signal beyond raw distance)",
+        )
+        if band_results is None:
+            print(
+                "Not enough data in the distance-matched band's train/held-out "
+                "split to fit -- can't confirm or rule out signal beyond "
+                "distance from this run alone."
+            )
 
+    if results is None:
+        raise SystemExit(
+            "Held-out set is empty or single-class; pick --val_chroms with "
+            "both merge and split examples."
+        )
     winner_name = max(results, key=lambda n: results[n][2])
     winner_clf, winner_scale, _ = results[winner_name]
     print(f"\nWinner (highest held-out F1): {winner_name}")
