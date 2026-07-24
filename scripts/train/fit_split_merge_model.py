@@ -473,6 +473,36 @@ def main():
                 "distance from this run alone."
             )
 
+    # Shape-only ablation: drop dist/r1/r2 (and, since they're derived from
+    # position rather than score, keep d1/d2/d3/dr/y1/y2/maxy) to test
+    # directly whether the classifiers are exploiting real valley-shape
+    # signal or just riding distance/r2's trivial separability. This is a
+    # cleaner test than the distance-matched band above when that band turns
+    # out empty (no dist overlap at all) -- it doesn't need any overlap to
+    # exist, since it removes the confounded features outright instead of
+    # conditioning on them.
+    shape_feature_names = tuple(n for n in FEATURE_NAMES if n not in ("dist", "r1", "r2"))
+    shape_idxs = [FEATURE_NAMES.index(n) for n in shape_feature_names]
+    Xs = X[:, shape_idxs]
+    print(
+        f"\n--- Shape-only ablation (dropped dist/r1/r2; kept "
+        f"{shape_feature_names}) ---"
+    )
+    _print_separability(
+        Xs, y, shape_feature_names,
+        "Per-feature separability, shape-only features",
+    )
+    shape_results = _fit_and_compare(
+        Xs[~is_val], y[~is_val], Xs[is_val], y[is_val], args,
+        "Held-out comparison, shape-only features "
+        "(tests for signal independent of distance/r1/r2)",
+    )
+    if shape_results is None:
+        print(
+            "Not enough data to fit/evaluate the shape-only subset from this "
+            "run alone."
+        )
+
     if results is None:
         raise SystemExit(
             "Held-out set is empty or single-class; pick --val_chroms with "
