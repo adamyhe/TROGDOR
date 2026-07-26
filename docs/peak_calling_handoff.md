@@ -353,14 +353,32 @@ below are motivated by that finding, not by the original geometric concerns.
       were (item 2b). **Not yet benchmarked** — next step is a
       `max_merge_distance` sweep (e.g. 200/500/1000/2000bp) against
       `compare_peaks.py` on GM12878 vs. dREG, on top of `seed_score=0.3`.
-    - **2c-ii, OPEN — option A, fix the label source.** Rebuild
-      `fit_split_merge_model.py`'s labeling rule around PRO-cap (or other
-      point-resolution) TSS calls instead of truth-interval membership —
-      "≥2 distinct TSS calls in this valley's span" removes the region-merge-
-      radius confound at its root and is the closer analog to how dREG's own
-      RF was actually trained. Only worth re-running the LR/tree/RF
-      comparison (and reconsidering `split_merge_rule="learned"` for
-      production) once this exists.
+    - **2c-ii, READY (promising G7 smoke test, awaiting a real G1-G6 run) —
+      option A, fix the label source.** Turned out to need no new labeling
+      *logic* — `_label_pair`'s existing rule (both summits in one truth
+      interval → merge, spanning two distinct intervals → split) already
+      does the right thing, since the goal is to keep bidirectional
+      promoters as one span, not split their two internal summits. The fix
+      is entirely about *which* truth-interval file: swapped
+      `K562.positive.bed.gz` (groHMM+DNase — gene-body/accessibility-level,
+      not initiation-precise) for `data/ENCSR220XSM_peaks.hg19.bed` (K562
+      PRO-cap, ENCODE ENCSR220XSM, bidirectional + unidirectional peaks,
+      already downloaded/lifted-over by `scripts/data/download_peaks.sh` —
+      no new data-sourcing code needed). `fit_split_merge_model.py`'s
+      `--tss_bed` default now points here; the old file still works via an
+      explicit `--tss_bed` override.
+
+      G7-only smoke test (not the real validation, but a strong signal):
+      excluded-ambiguous dropped from 95.6% to 40.7%; `dist` now shows real
+      overlap between merge/split (merge ∈ [32,672]bp, split ∈ [32,1696]bp —
+      no manufactured gap); the distance-matched-band control actually ran
+      this time (4,644 pairs) with held-out F1 staying at 0.90–0.92 inside
+      it; the shape-only ablation (no `dist`/`r1`/`r2`) scored comparably
+      (0.84–0.93); the winner was a 100-tree RandomForest (F1=0.93,
+      log_loss=0.24) — no degenerate single-threshold collapse, no
+      suspicious 0.0 log-loss artifact. Next step: re-run on the full G1-G6
+      set and re-check the same signals before refitting and reconsidering
+      `split_merge_rule="learned"` for production.
 
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the
