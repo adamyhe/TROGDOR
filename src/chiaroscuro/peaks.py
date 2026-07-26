@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 
 def resolve_seed_score(min_score, seed_score):
     """Resolve the profile caller's permissive candidate-seed threshold.
@@ -24,6 +26,8 @@ def _validate_profile_params(
     smooth_bins,
     valley_fraction,
     boundary_fraction,
+    split_merge_rule="threshold",
+    split_merge_cutoff=0.5,
 ):
     if max_gap < 0:
         raise ValueError("max_gap must be >= 0.")
@@ -41,6 +45,10 @@ def _validate_profile_params(
         raise ValueError("boundary_fraction must be in [0, 1].")
     if seed_score > min_score:
         raise ValueError("seed_score must be <= min_score.")
+    if split_merge_rule not in {"threshold", "learned"}:
+        raise ValueError("split_merge_rule must be 'threshold' or 'learned'.")
+    if not 0 <= split_merge_cutoff <= 1:
+        raise ValueError("split_merge_cutoff must be in [0, 1].")
 
 
 def _peak_from_bins(bins):
@@ -129,7 +137,45 @@ def _pairwise_features(block, scores, left, valley_i, right):
     return (dist, r1, r2, y1, y2, maxy, d1, d2, d3, dr)
 
 
-def _segments_from_valleys(block, scores, min_score, valley_fraction):
+# Fitted by scripts/train/fit_split_merge_model.py (LogisticRegression winner)
+# on K562 only (G1,G2,G3,G5,G6 prob bigwigs x K562.positive.bed.gz), min_score
+# 0.95, default seed_score/smooth_bins. Held-out (chr21,chr22) F1=1.00 (n=74,
+# 7 split pairs) on both the full 10-feature set and a shape-only ablation
+# that drops dist/r1/r2 -- the latter confirms the fit isn't merely
+# thresholding on summit-to-summit distance. See
+# docs/trogdor_dreg_peak_calling_findings.md for the fitting run and caveats
+# (notably: held-out set is small, and the "excluded ambiguous" pairs from
+# labeling are 96%+ of all candidates, so real-world generalization is not
+# fully proven by this fit alone).
+_SPLIT_MERGE_WEIGHTS = (
+    0.0020617864,
+    0.0035780178,
+    0.0036693964,
+    0.5511516,
+    2.7351534,
+    13.326024,
+    103.02077,
+    4.0272446,
+    -4.012432,
+    1.7906594,
+)
+_SPLIT_MERGE_BIAS = -16.161508
+
+
+def _predict_split(features, weights=_SPLIT_MERGE_WEIGHTS, bias=_SPLIT_MERGE_BIAS):
+    """Return P(split) for one adjacent-summit pair's ``FEATURE_NAMES`` tuple."""
+    z = bias + sum(w * f for w, f in zip(weights, features))
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def _segments_from_valleys(
+    block,
+    scores,
+    min_score,
+    valley_fraction,
+    split_merge_rule="threshold",
+    split_merge_cutoff=0.5,
+):
     summit_idxs = [i for i in _local_maxima(scores) if block[i][2] >= min_score]
     if not summit_idxs:
         return []
@@ -141,8 +187,13 @@ def _segments_from_valleys(block, scores, min_score, valley_fraction):
         if right - left <= 1:
             continue
         valley_i = min(range(left + 1, right), key=lambda i: scores[i])
-        weaker_summit = min(scores[left], scores[right])
-        if scores[valley_i] <= weaker_summit * valley_fraction:
+        if split_merge_rule == "learned":
+            features = _pairwise_features(block, scores, left, valley_i, right)
+            should_split = _predict_split(features) >= split_merge_cutoff
+        else:
+            weaker_summit = min(scores[left], scores[right])
+            should_split = scores[valley_i] <= weaker_summit * valley_fraction
+        if should_split:
             cut_points.append(valley_i)
 
     if not cut_points:
@@ -257,6 +308,8 @@ def call_profile_peaks(
     smooth_bins=1,
     valley_fraction=0.5,
     boundary_fraction=0.0,
+    split_merge_rule="threshold",
+    split_merge_cutoff=0.5,
 ):
     """Call score-profile-aware peaks from sorted scored bins.
 
@@ -264,6 +317,11 @@ def call_profile_peaks(
     signal. It does not compute p-values. Candidate blocks are seeded from a
     permissive score threshold, then nearby local maxima are split when the
     intervening valley is deep enough.
+
+    ``split_merge_rule="learned"`` replaces the fixed ``valley_fraction``
+    threshold with a pretrained classifier (see ``_predict_split``) over the
+    same dREG-equivalent geometry features (``_pairwise_features``),
+    splitting when its predicted split-probability is >= ``split_merge_cutoff``.
     """
     seed_score = resolve_seed_score(min_score, seed_score)
 
@@ -276,6 +334,8 @@ def call_profile_peaks(
         smooth_bins,
         valley_fraction,
         boundary_fraction,
+        split_merge_rule,
+        split_merge_cutoff,
     )
 
     blocks = _merge_seed_blocks(intervals, seed_score, max_gap)
@@ -284,7 +344,7 @@ def call_profile_peaks(
         raw_scores = [score for _, _, score in block]
         smooth = _smooth_scores(raw_scores, smooth_bins)
         for start_i, end_i in _segments_from_valleys(
-            block, smooth, min_score, valley_fraction
+            block, smooth, min_score, valley_fraction, split_merge_rule, split_merge_cutoff
         ):
             start_i, end_i = _trim_segment(
                 block, start_i, end_i, seed_score, boundary_fraction

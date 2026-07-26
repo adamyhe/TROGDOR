@@ -15,9 +15,11 @@ sys.modules.setdefault("torcheval", torcheval)
 sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
 sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
+import chiaroscuro.peaks as peaks_module
 from chiaroscuro.peaks import (
     FEATURE_NAMES,
     _pairwise_features,
+    _predict_split,
     call_peaks,
     call_profile_peaks,
     resolve_seed_score,
@@ -258,6 +260,10 @@ def test_invalid_profile_parameters_raise():
         call_profile_peaks([], boundary_fraction=-0.1)
     with pytest.raises(ValueError, match="smooth_bins"):
         call_profile_peaks([], smooth_bins=0)
+    with pytest.raises(ValueError, match="split_merge_rule"):
+        call_profile_peaks([], split_merge_rule="bogus")
+    with pytest.raises(ValueError, match="split_merge_cutoff"):
+        call_profile_peaks([], split_merge_cutoff=1.1)
 
 
 class TestPairwiseFeatures:
@@ -303,3 +309,84 @@ class TestPairwiseFeatures:
         d2 = features[FEATURE_NAMES_INDEX["d2"]]
         assert d2 == pytest.approx(0.0)
         assert d2 >= 0.0
+
+
+class TestPredictSplit:
+    """Tests for _predict_split()'s sigmoid(w . x + b) inference, using
+    hand-picked weights rather than the real shipped fit (which is expected
+    to change as the fitting script/data evolve)."""
+
+    def test_zero_weights_and_bias_gives_half(self):
+        weights = (0.0,) * 10
+        features = tuple(range(10))
+        assert _predict_split(features, weights=weights, bias=0.0) == pytest.approx(0.5)
+
+    def test_single_feature_dominates(self):
+        # Only the d2 (valley-depth) feature has nonzero weight.
+        weights = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0)
+        shallow = (0,) * 7 + (0.001,) + (0, 0)
+        deep = (0,) * 7 + (0.5,) + (0, 0)
+        assert _predict_split(shallow, weights=weights, bias=-1.0) < 0.5
+        assert _predict_split(deep, weights=weights, bias=-1.0) > 0.99
+
+
+class TestProfileLearnedSplitMergeRule:
+    """Tests for call_profile_peaks(split_merge_rule="learned"). Mocks
+    _predict_split itself (rather than the shipped weights, which are bound
+    into _predict_split's default arguments at import time and would not be
+    affected by monkeypatching the module-level constants) so these tests
+    don't churn whenever the model is refit."""
+
+    def test_learned_rule_splits_when_predictor_says_split(self, monkeypatch):
+        monkeypatch.setattr(peaks_module, "_predict_split", lambda features: 1.0)
+        intervals = [(0, 10, 0.95), (10, 20, 0.8), (20, 30, 0.97)]
+
+        peaks = call_profile_peaks(
+            intervals, min_score=0.9, seed_score=0.5, split_merge_rule="learned"
+        )
+
+        assert len(peaks) == 2
+
+    def test_learned_rule_merges_when_predictor_says_merge(self, monkeypatch):
+        monkeypatch.setattr(peaks_module, "_predict_split", lambda features: 0.0)
+        intervals = [(0, 10, 0.95), (10, 20, 0.2), (20, 30, 0.97)]
+
+        peaks = call_profile_peaks(
+            intervals, min_score=0.9, seed_score=0.1, split_merge_rule="learned"
+        )
+
+        assert len(peaks) == 1
+
+    def test_learned_rule_respects_cutoff(self, monkeypatch):
+        monkeypatch.setattr(peaks_module, "_predict_split", lambda features: 0.4)
+        intervals = [(0, 10, 0.95), (10, 20, 0.8), (20, 30, 0.97)]
+
+        merged = call_profile_peaks(
+            intervals,
+            min_score=0.9,
+            seed_score=0.5,
+            split_merge_rule="learned",
+            split_merge_cutoff=0.5,
+        )
+        split = call_profile_peaks(
+            intervals,
+            min_score=0.9,
+            seed_score=0.5,
+            split_merge_rule="learned",
+            split_merge_cutoff=0.3,
+        )
+
+        assert len(merged) == 1
+        assert len(split) == 2
+
+    def test_threshold_rule_default_unaffected_by_learned_mock(self, monkeypatch):
+        # The default ("threshold") path must never call _predict_split, so
+        # mocking it to always predict "split" must not change its output.
+        monkeypatch.setattr(peaks_module, "_predict_split", lambda features: 1.0)
+        intervals = [(0, 10, 0.95), (10, 20, 0.8), (20, 30, 0.97)]
+
+        peaks = call_profile_peaks(
+            intervals, min_score=0.9, seed_score=0.5, valley_fraction=0.5
+        )
+
+        assert len(peaks) == 1

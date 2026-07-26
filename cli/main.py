@@ -173,6 +173,21 @@ def cli():
         help="Profile caller only: trim boundaries to bins above this fraction of the way from seed_score to the local summit (0.0 disables trimming, 1.0 keeps only the summit bin).",
     )
     parser_pipeline.add_argument(
+        "--split_merge_rule",
+        choices=["threshold", "learned"],
+        default="threshold",
+        help="Profile caller only: 'threshold' uses --valley_fraction (default); "
+        "'learned' uses a pretrained classifier over dREG-equivalent valley "
+        "geometry features (see chiaroscuro.peaks._predict_split).",
+    )
+    parser_pipeline.add_argument(
+        "--split_merge_cutoff",
+        type=float,
+        default=0.5,
+        help="Profile caller only, --split_merge_rule=learned: split when the "
+        "predicted split-probability is >= this cutoff (default: 0.5).",
+    )
+    parser_pipeline.add_argument(
         "--min_support_signal",
         type=float,
         default=0.0,
@@ -356,6 +371,21 @@ def cli():
         type=float,
         default=0.95,
         help="Profile mode only: trim boundaries to bins above this fraction of the way from seed_score to the local summit (0.0 disables trimming, 1.0 keeps only the summit bin).",
+    )
+    parser_peaks.add_argument(
+        "--split_merge_rule",
+        choices=["threshold", "learned"],
+        default="threshold",
+        help="Profile mode only: 'threshold' uses --valley_fraction (default); "
+        "'learned' uses a pretrained classifier over dREG-equivalent valley "
+        "geometry features (see chiaroscuro.peaks._predict_split).",
+    )
+    parser_peaks.add_argument(
+        "--split_merge_cutoff",
+        type=float,
+        default=0.5,
+        help="Profile mode only, --split_merge_rule=learned: split when the "
+        "predicted split-probability is >= this cutoff (default: 0.5).",
     )
     parser_peaks.add_argument(
         "--min_support_signal",

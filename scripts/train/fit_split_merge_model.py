@@ -44,7 +44,7 @@ import numpy as np
 import pybigtools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import log_loss, precision_recall_fscore_support
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
@@ -224,8 +224,16 @@ def _build_candidates(args):
 
 def _fit_and_compare(X_train, y_train, X_val, y_val, args, title):
     """Fit LR/tree/RF on (X_train, y_train), evaluate on (X_val, y_val), print
-    a comparison table. Returns {name: (clf, needs_scaling, f1)}, or None if
-    either split is empty/single-class (nothing meaningful to fit/evaluate).
+    a comparison table. Returns {name: (clf, needs_scaling, f1, log_loss)}, or
+    None if either split is empty/single-class (nothing meaningful to
+    fit/evaluate).
+
+    Held-out sets here are small enough that F1 (a hard-threshold metric)
+    routinely ties at 1.0 across all three candidates -- that tie carries no
+    information about which model is actually better. log_loss uses the
+    full predicted probability, not just the thresholded class, so it can
+    still discriminate between tied-F1 models; it is the tie-breaker for
+    picking a winner below, not just a reported extra column.
     """
     print(f"\n--- {title} ---")
     if len(y_val) == 0 or len(set(y_val.tolist())) < 2:
@@ -244,16 +252,20 @@ def _fit_and_compare(X_train, y_train, X_val, y_val, args, title):
     X_val_scaled = scaler.transform(X_val)
 
     candidates = _build_candidates(args)
-    print(f"{'Model':<32} {'Precision':>10} {'Recall':>10} {'F1':>10}")
+    print(f"{'Model':<32} {'Precision':>10} {'Recall':>10} {'F1':>10} {'LogLoss':>10}")
     results = {}
     for name, (clf, scale) in candidates.items():
-        clf.fit(X_train_scaled if scale else X_train, y_train)
-        pred = clf.predict(X_val_scaled if scale else X_val)
+        X_train_fit = X_train_scaled if scale else X_train
+        X_val_fit = X_val_scaled if scale else X_val
+        clf.fit(X_train_fit, y_train)
+        pred = clf.predict(X_val_fit)
+        proba = clf.predict_proba(X_val_fit)[:, 1]
         p, r, f1, _ = precision_recall_fscore_support(
             y_val, pred, average="binary", zero_division=0
         )
-        results[name] = (clf, scale, f1)
-        print(f"{name:<32} {p:>10.4f} {r:>10.4f} {f1:>10.4f}")
+        ll = log_loss(y_val, proba, labels=[0, 1])
+        results[name] = (clf, scale, f1, ll)
+        print(f"{name:<32} {p:>10.4f} {r:>10.4f} {f1:>10.4f} {ll:>10.4f}")
     return results
 
 
@@ -508,9 +520,18 @@ def main():
             "Held-out set is empty or single-class; pick --val_chroms with "
             "both merge and split examples."
         )
-    winner_name = max(results, key=lambda n: results[n][2])
-    winner_clf, winner_scale, _ = results[winner_name]
-    print(f"\nWinner (highest held-out F1): {winner_name}")
+    # Primary: highest F1. Secondary (the usual case, since F1 saturates at
+    # 1.0 on these small held-out sets): lowest log_loss, so ties aren't
+    # silently broken by dict/insertion order instead of actual evidence.
+    winner_name = min(results, key=lambda n: (-results[n][2], results[n][3]))
+    winner_clf, winner_scale, winner_f1, winner_ll = results[winner_name]
+    tied = [n for n in results if results[n][2] == winner_f1]
+    if len(tied) > 1:
+        print(
+            f"\n{len(tied)} models tied at F1={winner_f1:.4f} ({', '.join(tied)}) "
+            f"-- broken by lowest log_loss."
+        )
+    print(f"\nWinner (F1={winner_f1:.4f}, log_loss={winner_ll:.4f}): {winner_name}")
     print("Refitting winner on ALL K562 pairs (train + held-out) for the shipped model...")
     final_scaler = None
     if winner_scale:
