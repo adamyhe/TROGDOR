@@ -19,6 +19,23 @@ GM12878 is never touched here -- it stays independent for the downstream
 K562-develop / GM12878-validate split discipline (the base TROGDOR model
 itself is trained/validated on K562 only, per scripts/train/train.py).
 
+Truth source (--tss_bed): defaults to `ENCSR220XSM_peaks.hg19.bed`, K562
+PRO-cap peaks from ENCODE experiment ENCSR220XSM (bidirectional +
+unidirectional calls, `scripts/data/download_peaks.sh`), NOT
+`K562.positive.bed.gz` (groHMM+DNase). The groHMM+DNase truth was tried
+first and found to be distance-confounded by construction -- its own
+merge-radius convention meant a pair's summit-to-summit distance alone
+perfectly predicted the merge/split label, so any classifier fit on it
+degenerated into a trivial single-distance threshold. PRO-cap peaks are a
+direct, bp-precise readout of transcription initiation (rather than
+groHMM's gene-body-level segmentation + DNase's general accessibility), and
+empirically produce real, overlapping merge/split distance distributions
+instead of a manufactured gap -- see
+docs/trogdor_dreg_peak_calling_findings.md's "Multi-Feature Split/Merge
+Fitting: Distance-Confounded Labels" and
+docs/peak_calling_handoff.md item 2c. `--tss_bed data/K562.positive.bed.gz`
+still works if ever needed for comparison.
+
 This is a *dev*-time script: scikit-learn is a dev dependency only, never a
 runtime one. The winning model's fitted parameters get pasted into
 chiaroscuro.peaks as a small constant, evaluated at runtime with pure Python
@@ -28,8 +45,7 @@ Usage
 -----
 python scripts/train/fit_split_merge_model.py \\
     --prob_bigwigs data/G1.prob.bw data/G2.prob.bw data/G3.prob.bw \\
-        data/G5.prob.bw data/G6.prob.bw \\
-    --tss_bed data/K562.positive.bed.gz -v
+        data/G5.prob.bw data/G6.prob.bw -v
 
 Each bigwig in --prob_bigwigs must have been written by `trogdor score` with
 a storage threshold no higher than the intended --seed_score (default 0.5),
@@ -282,9 +298,13 @@ def main():
     )
     parser.add_argument(
         "--tss_bed",
-        default=os.path.join(DATA_DIR, "K562.positive.bed.gz"),
+        default=os.path.join(DATA_DIR, "ENCSR220XSM_peaks.hg19.bed"),
         help="Ground-truth TSS/TIR BED shared by all --prob_bigwigs. Default: "
-        "K562.positive.bed.gz (dREG-derived; matches the shipped model).",
+        "ENCSR220XSM_peaks.hg19.bed (K562 PRO-cap, ENCODE ENCSR220XSM; "
+        "bp-precise initiation calls, not distance-confounded like "
+        "K562.positive.bed.gz's groHMM+DNase regions -- see module "
+        "docstring). Pass --tss_bed data/K562.positive.bed.gz to compare "
+        "against the old truth source.",
     )
     parser.add_argument("--min_score", type=float, default=0.95)
     parser.add_argument(
