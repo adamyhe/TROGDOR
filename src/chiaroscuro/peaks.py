@@ -28,6 +28,7 @@ def _validate_profile_params(
     boundary_fraction,
     split_merge_rule="threshold",
     split_merge_cutoff=0.5,
+    max_merge_distance=None,
 ):
     if max_gap < 0:
         raise ValueError("max_gap must be >= 0.")
@@ -49,6 +50,8 @@ def _validate_profile_params(
         raise ValueError("split_merge_rule must be 'threshold' or 'learned'.")
     if not 0 <= split_merge_cutoff <= 1:
         raise ValueError("split_merge_cutoff must be in [0, 1].")
+    if max_merge_distance is not None and max_merge_distance <= 0:
+        raise ValueError("max_merge_distance must be > 0.")
 
 
 def _peak_from_bins(bins):
@@ -137,16 +140,18 @@ def _pairwise_features(block, scores, left, valley_i, right):
     return (dist, r1, r2, y1, y2, maxy, d1, d2, d3, dr)
 
 
-# Fitted by scripts/train/fit_split_merge_model.py (LogisticRegression winner)
-# on K562 only (G1,G2,G3,G5,G6 prob bigwigs x K562.positive.bed.gz), min_score
-# 0.95, default seed_score/smooth_bins. Held-out (chr21,chr22) F1=1.00 (n=74,
-# 7 split pairs) on both the full 10-feature set and a shape-only ablation
-# that drops dist/r1/r2 -- the latter confirms the fit isn't merely
-# thresholding on summit-to-summit distance. See
-# docs/trogdor_dreg_peak_calling_findings.md for the fitting run and caveats
-# (notably: held-out set is small, and the "excluded ambiguous" pairs from
-# labeling are 96%+ of all candidates, so real-world generalization is not
-# fully proven by this fit alone).
+# NOT RECOMMENDED FOR PRODUCTION -- retained as scaffolding only. Fitted by
+# scripts/train/fit_split_merge_model.py on K562 pairs labeled by borrowing
+# K562.positive.bed.gz (groHMM+DNase) truth-interval membership. That label
+# source turned out to be distance-confounded by construction (dist/r2 alone
+# perfectly separate merge/split with zero value-range overlap), and the
+# actual winner-selection picked a full-feature model that degenerates to a
+# trivial single-distance threshold rather than genuine valley-shape
+# reasoning -- see docs/trogdor_dreg_peak_calling_findings.md's "Multi-Feature
+# Split/Merge Fitting: Distance-Confounded Labels" and
+# docs/peak_calling_handoff.md item 2c. Do not treat split_merge_rule="learned"
+# as validated until the label source is rebuilt from point-resolution (e.g.
+# PRO-cap) TSS calls instead of truth-interval membership.
 _SPLIT_MERGE_WEIGHTS = (
     0.0020617864,
     0.0035780178,
@@ -175,6 +180,7 @@ def _segments_from_valleys(
     valley_fraction,
     split_merge_rule="threshold",
     split_merge_cutoff=0.5,
+    max_merge_distance=None,
 ):
     summit_idxs = [i for i in _local_maxima(scores) if block[i][2] >= min_score]
     if not summit_idxs:
@@ -193,6 +199,12 @@ def _segments_from_valleys(
         else:
             weaker_summit = min(scores[left], scores[right])
             should_split = scores[valley_i] <= weaker_summit * valley_fraction
+        # Hard sanity cap, independent of the rule above: never merge summits
+        # farther apart than this, no matter how shallow the valley looks --
+        # applies on top of either the threshold or learned decision.
+        if max_merge_distance is not None:
+            dist = block[right][0] - block[left][0]
+            should_split = should_split or dist >= max_merge_distance
         if should_split:
             cut_points.append(valley_i)
 
@@ -310,6 +322,7 @@ def call_profile_peaks(
     boundary_fraction=0.0,
     split_merge_rule="threshold",
     split_merge_cutoff=0.5,
+    max_merge_distance=None,
 ):
     """Call score-profile-aware peaks from sorted scored bins.
 
@@ -322,6 +335,11 @@ def call_profile_peaks(
     threshold with a pretrained classifier (see ``_predict_split``) over the
     same dREG-equivalent geometry features (``_pairwise_features``),
     splitting when its predicted split-probability is >= ``split_merge_cutoff``.
+
+    ``max_merge_distance``, if set, forces a split whenever two adjacent
+    summits are at least this many bp apart, regardless of valley depth or
+    ``split_merge_rule`` -- a hard cap against merging distant summits into
+    one implausibly wide peak.
     """
     seed_score = resolve_seed_score(min_score, seed_score)
 
@@ -336,6 +354,7 @@ def call_profile_peaks(
         boundary_fraction,
         split_merge_rule,
         split_merge_cutoff,
+        max_merge_distance,
     )
 
     blocks = _merge_seed_blocks(intervals, seed_score, max_gap)
@@ -344,7 +363,13 @@ def call_profile_peaks(
         raw_scores = [score for _, _, score in block]
         smooth = _smooth_scores(raw_scores, smooth_bins)
         for start_i, end_i in _segments_from_valleys(
-            block, smooth, min_score, valley_fraction, split_merge_rule, split_merge_cutoff
+            block,
+            smooth,
+            min_score,
+            valley_fraction,
+            split_merge_rule,
+            split_merge_cutoff,
+            max_merge_distance,
         ):
             start_i, end_i = _trim_segment(
                 block, start_i, end_i, seed_score, boundary_fraction

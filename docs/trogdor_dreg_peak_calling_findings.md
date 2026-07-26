@@ -570,6 +570,82 @@ decision — a fundamentally richer rule than any single scalar threshold —
 which is the direction to pursue next (see
 `docs/peak_calling_handoff.md`'s multi-feature split/merge item).
 
+## Multi-Feature Split/Merge Fitting: Distance-Confounded Labels (2026-07-25)
+
+Verified dREG's actual split/merge mechanism against its public source
+(`dREG/R/peak_calling_rf.R`): a random forest over 10 local score-profile
+geometry features — `dist`, `r1`/`r2` (valley-to-summit distances),
+`y1`/`y2` (summit scores), `maxy`, `d1` (`|y1-y2|`), `d2`
+(`min(y1,y2)-valley`), `d3` (`valley`), `dr` (`d2/(d1+d3)`) — pretrained
+once, not refit per dataset. No coverage or candidate-density features, correcting
+this doc's/`peak_calling_handoff.md`'s earlier wrong description of both.
+
+Implemented the same 10 features (`FEATURE_NAMES`/`_pairwise_features` in
+`peaks.py`) and `scripts/train/fit_split_merge_model.py`, which fits
+LogisticRegression/DecisionTree(depth=3)/RandomForest(n=100) on K562-only
+pairs and reports held-out (`chr21`/`chr22`) precision/recall/F1/log-loss.
+Pairs are labeled by borrowing `K562.positive.bed.gz` (groHMM+DNase)
+truth-interval membership: both summits inside one truth interval → merge;
+spanning ≥2 distinct truth intervals → split; anything else excluded.
+
+**Real G1-G6 run (61,501 candidate pairs; 2,307 kept after excluding 96.2%
+as ambiguous; 2,233 train / 74 held-out):**
+
+| Model | Precision | Recall | F1 | LogLoss |
+| --- | --- | --- | --- | --- |
+| LogisticRegression | 1.0000 | 1.0000 | 1.0000 | 0.0352 |
+| DecisionTree(depth=3) | 1.0000 | 1.0000 | 1.0000 | 0.0000 |
+| RandomForest(n=100,depth=6) | 1.0000 | 1.0000 | 1.0000 | 0.0039 |
+
+Perfect held-out F1 across all three candidates was a red flag, not a
+success. A per-feature separability diagnostic (`_print_separability`) on the
+full-data run showed `dist`/`r2` have **zero value-range overlap** between
+classes (merge `dist` ∈ [32,144]bp, split `dist` ∈ [224,1760]bp) — i.e. the
+labeling rule is trivially, perfectly separable by distance alone, by
+construction: a region-interval ground truth's boundaries already encode
+*that caller's own* merge-radius convention, and any pair-label built from
+interval membership inherits it. A distance-matched-band control (restrict
+to the `dist` range where classes actually overlap) found **no overlap at
+all** — there is no data left once distance is controlled for, so this
+control could not even run.
+
+A **shape-only ablation** (drop `dist`/`r1`/`r2`, keep only
+`y1`/`y2`/`maxy`/`d1`/`d2`/`d3`/`dr`) still hit near-perfect held-out
+log-loss (LR 0.0600, tree 0.0085, RF 0.0079) — meaningfully above zero but
+still very good, confirming genuine valley-shape signal exists independent
+of distance. But the actual winner-selection procedure (max F1, log-loss
+tie-break) operates on the full 10-feature fit, and there it picked
+`DecisionTree(depth=3)`, which on refit against all K562 data collapsed to a
+**single node**: `r2 >= 128.0 → split, else merge`. That is a raw-distance
+threshold with no score/shape information at all — not meaningfully
+different from (arguably worse than, since it discards score information)
+the existing `valley_fraction` rule — and has no principled reason to
+generalize to the 96.2% of pairs excluded from training as ambiguous, which
+don't share this label source's artificial distance gap.
+
+**Separate pitfall, also worth recording:** comparing log-loss between a
+single decision tree and a random forest on a small held-out set (74 pairs,
+7 positive) is unreliable. A tree with pure leaves reports hard 0.0/1.0
+class probabilities by construction, trivially minimizing log-loss whenever
+its training data is cleanly separable — while a random forest averages 100
+bootstrapped trees, so even 100%-correct hard predictions come out as, e.g.,
+0.98 rather than 1.0, giving a nonzero log-loss that reflects *more honest*
+calibration, not worse generalization. `DecisionTree`'s log_loss=0.0000
+beating `RandomForest`'s 0.0039 in the table above is this artifact, not
+evidence the tree is the better model.
+
+**Conclusion and decision (see `docs/peak_calling_handoff.md` item 2c):** do
+not ship any model fit against this label source (`split_merge_rule="learned"`
+stays implemented but opt-in/off-by-default in `peaks.py`, with its
+currently-hardcoded weights explicitly not recommended for production).
+Two follow-ups: (B, done) `max_merge_distance` — a single hand-tunable
+distance cap layered on the existing `valley_fraction` rule, sweepable via
+the same direct-benchmark methodology that tuned `seed_score`/
+`boundary_fraction`, no proxy labels involved; (A, open) rebuild the pair
+labels from PRO-cap (or other point-resolution) TSS calls instead of
+truth-interval membership, removing the region-merge-radius confound at its
+source and matching how dREG's own RF was actually trained.
+
 ## Sources Checked
 
 - Danko-Lab dREG README:
