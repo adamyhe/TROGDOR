@@ -183,12 +183,14 @@ below are motivated by that finding, not by the original geometric concerns.
      the ceiling tautology, but becomes a relative-rank/triage measure, not
      a strict FDR.
    - A richer multi-feature split/merge decision (dREG's random-forest role
-     — valley depth, width, local candidate density, coverage support). This
-     bullet originally tied it to null-comparison/calibration, which is now
-     closed for good — but the split/merge decision itself is pure peak
-     geometry (replacing `_segments_from_valleys`'s single `valley_fraction`
-     threshold), not inherently a calibration concept, so it doesn't need to
-     wait on anything above. Promoted to its own active item — see 2c below.
+     — verified against dREG's own R source: 10 local score-profile geometry
+     features, `dist`/`r1`/`r2`/`y1`/`y2`/`maxy`/`d1`/`d2`/`d3`/`dr`; no
+     coverage or candidate-density features involved). This bullet originally
+     tied it to null-comparison/calibration, which is now closed for good —
+     but the split/merge decision itself is pure peak geometry (replacing
+     `_segments_from_valleys`'s single `valley_fraction` threshold), not
+     inherently a calibration concept, so it doesn't need to wait on anything
+     above. Promoted to its own active item — see 2c below.
 
 2. **DONE for G7/K562 groHMM+DNase — independent-ground-truth validation.**
    Ran on the `peak-geometry` branch using the surviving local assets in
@@ -298,17 +300,67 @@ below are motivated by that finding, not by the original geometric concerns.
     Full sweep table in `docs/trogdor_dreg_peak_calling_findings.md`'s
     "GM12878 Recall Gap vs. dREG" section.
 
-2c. **ACTIVE — richer multi-feature split/merge decision (promoted from
-    item 1's old calibration-adjacent bullet).** dREG uses a random forest
-    over valley depth, width, local candidate density, and coverage support
-    to decide whether adjacent local maxima split into separate peaks or
-    merge into one; TROGDOR's `_segments_from_valleys` (`peaks.py`) uses a
-    single fixed `valley_fraction` threshold on valley depth alone. This is
-    pure peak geometry — no calibration/null machinery involved — so it can
-    be prototyped directly. Motivated by 2b: dREG's edge is in recall/
-    sensitivity, and it's plausible that's coming from smarter split/merge
-    decisions (denser, more localized calls) rather than from a different
-    threshold philosophy. Currently being planned/prototyped.
+2c. **CLOSED (for now) — richer multi-feature split/merge decision via a
+    fitted classifier; distance-confounded labels made it untrustworthy,
+    split into two follow-ups (2c-i done, 2c-ii open).** dREG uses a random
+    forest over 10 local score-profile geometry features (`dist`, `r1`, `r2`,
+    `y1`, `y2`, `maxy`, `d1`, `d2`, `d3`, `dr` — see item 1 above) to decide
+    whether adjacent local maxima split or merge; TROGDOR's
+    `_segments_from_valleys` (`peaks.py`) used a single fixed
+    `valley_fraction` threshold on valley depth alone. Implemented the same
+    10 features (`_pairwise_features`) and fit LogisticRegression/
+    DecisionTree/RandomForest on K562 pairs
+    (`scripts/train/fit_split_merge_model.py`), labeling each pair by
+    borrowing `K562.positive.bed.gz` (groHMM+DNase) truth-interval
+    membership: both summits in one truth interval → merge, spanning two
+    distinct truth intervals → split.
+
+    **Finding: this label source is structurally distance-confounded, not
+    fixable by relabeling rules.** `dist`/`r2` alone perfectly separate
+    merge/split on real G1-G6 K562 data with zero value-range overlap (merge
+    `dist` ∈ [32,144]bp, split `dist` ∈ [224,1760]bp) — because a
+    region-interval ground truth's own boundaries already encode *its*
+    merge-radius convention, any pair-labeling rule built from interval
+    membership inherits that as a distance signal. A distance-matched-band
+    control (restricting to the `dist` range where classes overlap) found no
+    overlap at all — there's no data left once distance is controlled for.
+    A shape-only ablation (dropping `dist`/`r1`/`r2` entirely) still hit
+    near-perfect held-out log-loss (0.008-0.03 for tree/RF/LR vs. the
+    full-feature winner's 0.0000), showing real valley-shape signal exists
+    independent of distance — but the actual winner-selection procedure
+    (highest F1, log-loss tie-break) picked a full-feature decision tree
+    that degenerated to a single raw-distance threshold (`r2 >= 128bp →
+    split`), not a shape-aware rule — no more useful than the existing
+    `valley_fraction` threshold, and with no reason to generalize to the 96%+
+    of pairs excluded from training as ambiguous. (Also surfaced, separately:
+    comparing log-loss between a single decision tree and a random forest is
+    unreliable on small held-out sets — a tree with pure leaves reports hard
+    0/1 probabilities and can look artificially better than a forest's
+    honestly-averaged, less overconfident ones.)
+
+    Full 10-feature runtime inference (`_predict_split`, `_pairwise_features`,
+    `split_merge_rule="learned"`/`--split_merge_cutoff` on `peaks`/`pipeline`)
+    is implemented and tested in `peaks.py`/`cli/`, opt-in and off by default
+    — but the currently-hardcoded `_SPLIT_MERGE_WEIGHTS`/`_SPLIT_MERGE_BIAS`
+    are from the confounded fit and are **not recommended for production**.
+    Two follow-ups, not mutually exclusive:
+
+    - **2c-i, DONE — option B, hand-tunable distance cap.** Added
+      `max_merge_distance` (`peaks.py`, `cli/`): forces a split when two
+      adjacent summits are at least this many bp apart, regardless of valley
+      depth or `split_merge_rule` — one interpretable knob, no proxy-label
+      fitting, sweepable the same proven way `seed_score`/`boundary_fraction`
+      were (item 2b). **Not yet benchmarked** — next step is a
+      `max_merge_distance` sweep (e.g. 200/500/1000/2000bp) against
+      `compare_peaks.py` on GM12878 vs. dREG, on top of `seed_score=0.3`.
+    - **2c-ii, OPEN — option A, fix the label source.** Rebuild
+      `fit_split_merge_model.py`'s labeling rule around PRO-cap (or other
+      point-resolution) TSS calls instead of truth-interval membership —
+      "≥2 distinct TSS calls in this valley's span" removes the region-merge-
+      radius confound at its root and is the closer analog to how dREG's own
+      RF was actually trained. Only worth re-running the LR/tree/RF
+      comparison (and reconsidering `split_merge_rule="learned"` for
+      production) once this exists.
 
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the

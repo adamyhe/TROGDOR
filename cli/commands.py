@@ -85,6 +85,7 @@ def _peak_params(args):
         "boundary_fraction": getattr(args, "boundary_fraction", 0.95),
         "split_merge_rule": getattr(args, "split_merge_rule", "threshold"),
         "split_merge_cutoff": getattr(args, "split_merge_cutoff", 0.5),
+        "max_merge_distance": getattr(args, "max_merge_distance", None),
         "min_support_signal": getattr(args, "min_support_signal", 0.0),
         "support_plus": getattr(args, "support_plus_bigwig", None),
         "support_minus": getattr(args, "support_minus_bigwig", None),
@@ -108,6 +109,8 @@ def _peak_params(args):
         raise ValueError("--split_merge_rule must be 'threshold' or 'learned'.")
     if not 0 <= params["split_merge_cutoff"] <= 1:
         raise ValueError("--split_merge_cutoff must be in [0, 1].")
+    if params["max_merge_distance"] is not None and params["max_merge_distance"] <= 0:
+        raise ValueError("--max_merge_distance must be > 0.")
     if params["seed_score"] is not None and params["seed_score"] > threshold:
         raise ValueError("--seed_score must be <= --min_score.")
     if mode == "profile":
@@ -187,6 +190,7 @@ def _call_chrom_peaks(chrom, intervals, params, support_handles=None):
             boundary_fraction=params["boundary_fraction"],
             split_merge_rule=params["split_merge_rule"],
             split_merge_cutoff=params["split_merge_cutoff"],
+            max_merge_distance=params["max_merge_distance"],
         ):
             if not _has_support(
                 support_handles, params, chrom, peak["start"], peak["end"]
@@ -476,6 +480,7 @@ def cmd_pipeline(args):
                 boundary_fraction=getattr(args, "boundary_fraction", 0.95),
                 split_merge_rule=getattr(args, "split_merge_rule", "threshold"),
                 split_merge_cutoff=getattr(args, "split_merge_cutoff", 0.5),
+                max_merge_distance=getattr(args, "max_merge_distance", None),
                 min_support_signal=getattr(args, "min_support_signal", 0.0),
                 support_plus_bigwig=args.pl_bigwig,
                 support_minus_bigwig=args.mn_bigwig,

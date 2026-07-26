@@ -264,6 +264,10 @@ def test_invalid_profile_parameters_raise():
         call_profile_peaks([], split_merge_rule="bogus")
     with pytest.raises(ValueError, match="split_merge_cutoff"):
         call_profile_peaks([], split_merge_cutoff=1.1)
+    with pytest.raises(ValueError, match="max_merge_distance"):
+        call_profile_peaks([], max_merge_distance=0)
+    with pytest.raises(ValueError, match="max_merge_distance"):
+        call_profile_peaks([], max_merge_distance=-10)
 
 
 class TestPairwiseFeatures:
@@ -390,3 +394,45 @@ class TestProfileLearnedSplitMergeRule:
         )
 
         assert len(peaks) == 1
+
+
+class TestMaxMergeDistance:
+    """Tests for the max_merge_distance hard sanity cap (option B: extend
+    the interpretable threshold rule with one distance knob, instead of
+    trusting a classifier fit on distance-confounded proxy labels)."""
+
+    # Shallow valley (0.9 against summits 0.95/0.97) that valley_fraction=0.5
+    # would normally keep merged -- summit-to-summit distance is 20bp.
+    _INTERVALS = [(0, 10, 0.95), (10, 20, 0.9), (20, 30, 0.97)]
+
+    def test_forces_split_on_far_apart_shallow_valley(self):
+        without_cap = call_profile_peaks(
+            self._INTERVALS, min_score=0.9, seed_score=0.5
+        )
+        with_cap = call_profile_peaks(
+            self._INTERVALS, min_score=0.9, seed_score=0.5, max_merge_distance=15
+        )
+
+        assert len(without_cap) == 1
+        assert len(with_cap) == 2
+
+    def test_no_effect_when_distance_below_cap(self):
+        peaks = call_profile_peaks(
+            self._INTERVALS, min_score=0.9, seed_score=0.5, max_merge_distance=1000
+        )
+
+        assert len(peaks) == 1
+
+    def test_applies_on_top_of_learned_rule_too(self, monkeypatch):
+        # Even if the learned rule says "merge", the distance cap overrides it.
+        monkeypatch.setattr(peaks_module, "_predict_split", lambda features: 0.0)
+
+        peaks = call_profile_peaks(
+            self._INTERVALS,
+            min_score=0.9,
+            seed_score=0.5,
+            split_merge_rule="learned",
+            max_merge_distance=15,
+        )
+
+        assert len(peaks) == 2

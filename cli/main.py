@@ -188,6 +188,14 @@ def cli():
         "predicted split-probability is >= this cutoff (default: 0.5).",
     )
     parser_pipeline.add_argument(
+        "--max_merge_distance",
+        type=int,
+        default=None,
+        help="Profile caller only: force a split when two adjacent summits are "
+        "at least this many bp apart, regardless of valley depth or "
+        "--split_merge_rule (default: disabled).",
+    )
+    parser_pipeline.add_argument(
         "--min_support_signal",
         type=float,
         default=0.0,
@@ -386,6 +394,14 @@ def cli():
         default=0.5,
         help="Profile mode only, --split_merge_rule=learned: split when the "
         "predicted split-probability is >= this cutoff (default: 0.5).",
+    )
+    parser_peaks.add_argument(
+        "--max_merge_distance",
+        type=int,
+        default=None,
+        help="Profile mode only: force a split when two adjacent summits are "
+        "at least this many bp apart, regardless of valley depth or "
+        "--split_merge_rule (default: disabled).",
     )
     parser_peaks.add_argument(
         "--min_support_signal",
