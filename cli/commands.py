@@ -83,6 +83,8 @@ def _peak_params(args):
         "smooth_bins": getattr(args, "smooth_bins", 3),
         "valley_fraction": getattr(args, "valley_fraction", 0.5),
         "boundary_fraction": getattr(args, "boundary_fraction", 0.95),
+        "split_merge_rule": getattr(args, "split_merge_rule", "threshold"),
+        "split_merge_cutoff": getattr(args, "split_merge_cutoff", 0.5),
         "min_support_signal": getattr(args, "min_support_signal", 0.0),
         "support_plus": getattr(args, "support_plus_bigwig", None),
         "support_minus": getattr(args, "support_minus_bigwig", None),
@@ -102,6 +104,10 @@ def _peak_params(args):
         raise ValueError("--valley_fraction must be in [0, 1].")
     if not 0 <= params["boundary_fraction"] <= 1:
         raise ValueError("--boundary_fraction must be in [0, 1].")
+    if params["split_merge_rule"] not in {"threshold", "learned"}:
+        raise ValueError("--split_merge_rule must be 'threshold' or 'learned'.")
+    if not 0 <= params["split_merge_cutoff"] <= 1:
+        raise ValueError("--split_merge_cutoff must be in [0, 1].")
     if params["seed_score"] is not None and params["seed_score"] > threshold:
         raise ValueError("--seed_score must be <= --min_score.")
     if mode == "profile":
@@ -179,6 +185,8 @@ def _call_chrom_peaks(chrom, intervals, params, support_handles=None):
             smooth_bins=params["smooth_bins"],
             valley_fraction=params["valley_fraction"],
             boundary_fraction=params["boundary_fraction"],
+            split_merge_rule=params["split_merge_rule"],
+            split_merge_cutoff=params["split_merge_cutoff"],
         ):
             if not _has_support(
                 support_handles, params, chrom, peak["start"], peak["end"]
@@ -466,6 +474,8 @@ def cmd_pipeline(args):
                 smooth_bins=getattr(args, "smooth_bins", 3),
                 valley_fraction=getattr(args, "valley_fraction", 0.5),
                 boundary_fraction=getattr(args, "boundary_fraction", 0.95),
+                split_merge_rule=getattr(args, "split_merge_rule", "threshold"),
+                split_merge_cutoff=getattr(args, "split_merge_cutoff", 0.5),
                 min_support_signal=getattr(args, "min_support_signal", 0.0),
                 support_plus_bigwig=args.pl_bigwig,
                 support_minus_bigwig=args.mn_bigwig,
