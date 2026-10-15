@@ -9,6 +9,8 @@ tracks and candidate peak BED files.
 import numpy as np
 import pandas as pd
 
+from .bigwig import read_values
+
 
 def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose=False):
     """Return an array of per-peak summary scores from the bigWig.
@@ -17,7 +19,7 @@ def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose=False):
 
     Parameters
     ----------
-    bw : pybigtools file handle
+    bw : figwig.BigWigReader
         Open probability bigWig.
     peaks_df : pd.DataFrame
         Columns ``chrom``, ``start``, ``end``.
@@ -50,9 +52,7 @@ def score_peaks(bw, peaks_df, chrom_sizes, stat, chroms, verbose=False):
             end = min(int(row["end"]), chrom_len)
             if start >= end:
                 continue
-            vals = np.nan_to_num(
-                np.array(bw.values(chrom, start, end), dtype=np.float32)
-            )
+            vals = np.nan_to_num(read_values(bw, chrom, start, end))
             if len(vals) == 0:
                 continue
             scores[idx] = vals.max() if stat == "max" else vals.mean()

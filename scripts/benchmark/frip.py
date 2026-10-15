@@ -21,7 +21,8 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pybigtools
+
+from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 
 
 def parse_args():
@@ -52,9 +53,9 @@ def parse_args():
 def main():
     args = parse_args()
 
-    pl_bw = pybigtools.open(args.pl_bigwig)
-    mn_bw = pybigtools.open(args.mn_bigwig)
-    chrom_sizes = pl_bw.chroms()
+    pl_bw = open_bigwig(args.pl_bigwig)
+    mn_bw = open_bigwig(args.mn_bigwig)
+    chrom_sizes = bw_chrom_sizes(pl_bw)
     chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
 
     peaks_df = pd.read_csv(
@@ -82,10 +83,10 @@ def main():
             print(f"  Reading {chrom} ({chrom_len:,} bp)...", flush=True)
 
         pl = np.abs(
-            np.nan_to_num(np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32))
+            np.nan_to_num(read_values(pl_bw, chrom, 0, chrom_len))
         )
         mn = np.abs(
-            np.nan_to_num(np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32))
+            np.nan_to_num(read_values(mn_bw, chrom, 0, chrom_len))
         )
         coverage = pl + mn
 

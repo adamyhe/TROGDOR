@@ -118,28 +118,8 @@ trogdor fdr -b mysample.prob.bw -t candidate_peaks.bed.gz --fdr_target 0.05
 | `--figure`      | off     | Save FDR-vs-threshold plot to path                       |
 | `--chroms`      | all     | Restrict to specific chromosomes                         |
 
-## Development/Model retraining
+## Development
 
-Install needed UCSC tools:
-
-```bash
-mamba create trogdor
-mamba activate trogdor
-mamba install -c bioconda ucsc-liftover
-```
-
-Install TROGDOR with dev dependencies:
-
-```bash
-git clone git@github.com:adamyhe/TROGDOR.git
-cd TROGDOR
-pip install -e ".[dev]"
-```
-
-### Training
-
-Most users do not need to retrain — a pre-trained model is bundled with the
-package and used automatically by the CLI. See [`scripts/README.md`](scripts/README.md)
-for data download, training, and benchmarking instructions of the original TROGDOR model.
-I haven't included general scripts for retraining on custom datasets, but these should
-be a useful starting point.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for installing from source, running
+the tests, and retraining the model. Development uses
+[uv](https://docs.astral.sh/uv/).

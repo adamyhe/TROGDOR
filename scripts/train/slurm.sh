@@ -21,6 +21,5 @@ ml biology
 ml htslib
 ml ucsc-utils
 
-mamba activate torch
 nvidia-smi -L
-time python train_bce_SCREEN.py
+time uv run python train_bce_SCREEN.py

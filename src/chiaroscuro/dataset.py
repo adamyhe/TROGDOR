@@ -7,9 +7,10 @@ This module defines dataset classes used for loading data for TROGDOR.
 
 import numpy as np
 import pandas as pd
-import pybigtools
 import torch
 import tqdm
+
+from .bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 
 
 class NascentDataset_(torch.utils.data.Dataset):
@@ -130,14 +131,16 @@ class NascentDataset(torch.utils.data.Dataset):
         self._tss_dfs = []
 
         # Pre-compute window indices from BigWig chromosome sizes
-        for dataset_idx, pl_bw in enumerate(tqdm.tqdm(pl_bigwigs)):
-            pl_bw = pybigtools.open(pl_bw)
-            pl_chrom_sizes = dict(pl_bw.chroms())
-            pl_bw.close()
-
-            mn_bw = pybigtools.open(mn_bigwigs[dataset_idx])
-            mn_chroms = set(mn_bw.chroms().keys())
-            mn_bw.close()
+        # Readers keep the parsed header and index, and pickle to workers.
+        self._pl_readers = []
+        self._mn_readers = []
+        for dataset_idx, pl_bigwig in enumerate(tqdm.tqdm(pl_bigwigs)):
+            pl_bw = open_bigwig(pl_bigwig)
+            mn_bw = open_bigwig(mn_bigwigs[dataset_idx])
+            self._pl_readers.append(pl_bw)
+            self._mn_readers.append(mn_bw)
+            pl_chrom_sizes = bw_chrom_sizes(pl_bw)
+            mn_chroms = set(bw_chrom_sizes(mn_bw))
 
             chrom_sizes = {
                 c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms
@@ -185,14 +188,10 @@ class NascentDataset(torch.utils.data.Dataset):
         win_end = win_start + self.window_size
 
         # Load signal from BigWigs
-        pl_bw = pybigtools.open(self.pl_bigwigs[dataset_idx])
-        mn_bw = pybigtools.open(self.mn_bigwigs[dataset_idx])
-        pl_vals = np.array(pl_bw.values(chrom, win_start, win_end), dtype=np.float32)
+        pl_vals = read_values(self._pl_readers[dataset_idx], chrom, win_start, win_end)
         mn_vals = np.abs(
-            np.array(mn_bw.values(chrom, win_start, win_end), dtype=np.float32)
+            read_values(self._mn_readers[dataset_idx], chrom, win_start, win_end)
         )
-        pl_bw.close()
-        mn_bw.close()
 
         # Replace NaN with 0
         pl_vals = np.nan_to_num(pl_vals)

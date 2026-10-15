@@ -39,7 +39,7 @@ Positive TIR peaks are fetched from the Danko lab FTP (`K562.positive.bed.gz`).
 ## 2. Train
 
 ```bash
-python scripts/train/train.py
+uv run python scripts/train/train.py
 ```
 
 Trains on G1/G2/G3/G5 with a 7:1 ratio of TSS-centered to genome-tiled
@@ -82,7 +82,7 @@ model = TROGDOR(loss_kwargs={"alpha": 0.3, "beta": 0.7, "gamma": 2.0})
 To find the best peak learning rate before a full training run:
 
 ```bash
-python scripts/train/lr_search.py
+uv run python scripts/train/lr_search.py
 ```
 
 Sweeps 7 log-spaced LRs from 1e-6 to 1e-3, training each for 1000 steps with
@@ -91,11 +91,12 @@ the `lr_search` group.
 
 ### Weights & Biases
 
-The script initializes a wandb run automatically. Install wandb first:
+The script initializes a wandb run automatically. wandb is in the dev
+dependency group (see [`CONTRIBUTING.md`](../CONTRIBUTING.md)):
 
 ```bash
-pip install -e ".[dev]"
-wandb login
+uv sync --group dev
+uv run wandb login
 ```
 
 Metrics logged per batch: `train/loss`, `train/lr`.
@@ -106,7 +107,7 @@ Metrics logged per epoch: `val/loss`, `val/auprc`, `val/dice`.
 Score the whole genome against ground-truth peaks and report AUROC/AUPRC:
 
 ```bash
-python scripts/benchmark/benchmark.py \
+uv run python scripts/benchmark/benchmark.py \
   -M TROGDOR.torch \
   -p data/G6.pl.bw \
   -m data/G6.mn.bw \
@@ -134,7 +135,7 @@ Expected output on K562 data: AUROC > 0.9, AUPRC meaningfully above the positive
 To benchmark a model that outputs a pre-computed probability bigWig (e.g. a baseline method):
 
 ```bash
-python scripts/benchmark/benchmark_bw.py \
+uv run python scripts/benchmark/benchmark_bw.py \
   -b predictions.bw \
   -t data/K562.positive.bed.gz \
   --chroms chr1 chr2 \
@@ -156,7 +157,7 @@ Quantifies the AUPRC degradation for bins that fall near chunk boundaries
 adjacent chunk. Useful for tuning the `--overlap` parameter.
 
 ```bash
-python scripts/benchmark/benchmark_tile_position.py \
+uv run python scripts/benchmark/benchmark_tile_position.py \
   -M TROGDOR.torch \
   -p data/G6.pl.bw \
   -m data/G6.mn.bw \
@@ -192,7 +193,7 @@ reference BED, but in practice it has been less informative than the empirical
 FDR command.
 
 ```bash
-python scripts/benchmark/threshold_sweep.py \
+uv run python scripts/benchmark/threshold_sweep.py \
   -b predictions.prob.bw \
   -t data/K562.positive.bed.gz \
   --caller_mode refined \
@@ -226,7 +227,7 @@ tss_bed  promoter_bed  enhancer_bed  bidirectional_bed  gene_body_bed  blacklist
 Run:
 
 ```bash
-python scripts/benchmark/truth_panel.py \
+uv run python scripts/benchmark/truth_panel.py \
   --manifest truth_panel.tsv \
   --chrom_sizes hg38.chrom.sizes \
   --output_prefix panel_report \

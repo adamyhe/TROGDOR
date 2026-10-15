@@ -12,9 +12,9 @@ import math
 import time
 
 import torch
-from torcheval.metrics.functional import binary_auprc
 
 from .logger import Logger
+from .metrics import binary_auprc
 from .modules import DecoderBlock, DoubleConv1D, EncoderBlock
 
 
