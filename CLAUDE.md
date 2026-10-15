@@ -71,6 +71,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `cli/main.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
 - `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
 - `src/chiaroscuro/bigwig.py` – figwig-backed bigWig I/O helpers: `open_bigwig()`, `chrom_sizes()`, `read_values()` (per-base reads, split into windows for multithreaded decompression), `read_runs()`/`split_runs()`/`infer_bin_size()` (figwig has no `records()`; these rebuild a score bigWig's fixed-width bins, since equal-valued neighbouring bins read back as one run), `write_intervals()`
+- `src/chiaroscuro/metrics.py` – `binary_auprc()` (average precision) and `binary_auroc()` in plain torch, replacing torcheval; tied scores count as one threshold, matching torcheval/scikit-learn
 - `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)

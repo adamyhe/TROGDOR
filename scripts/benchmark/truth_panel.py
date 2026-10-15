@@ -19,10 +19,10 @@ import argparse
 
 import numpy as np
 import pandas as pd
-from torcheval.metrics.functional import binary_auprc, binary_auroc
 import torch
 
 from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
+from chiaroscuro.metrics import binary_auprc, binary_auroc
 from chiaroscuro.utils import encode_labels
 
 

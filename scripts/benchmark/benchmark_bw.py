@@ -24,9 +24,9 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
-from torcheval.metrics.functional import binary_auprc, binary_auroc
 
 from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
+from chiaroscuro.metrics import binary_auprc, binary_auroc
 from chiaroscuro.utils import encode_labels
 
 

@@ -8,10 +8,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import wandb
-from torcheval.metrics.functional import binary_auprc
 
 from chiaroscuro.dataset import MixedBatchLoader, NascentDataset
 from chiaroscuro.data_transforms import normalization
+from chiaroscuro.metrics import binary_auprc
 from chiaroscuro.trogdor import TROGDOR
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")

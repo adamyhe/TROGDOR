@@ -16,10 +16,10 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
-from torcheval.metrics.functional import binary_auprc
 
 from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 from chiaroscuro.data_transforms import normalization
+from chiaroscuro.metrics import binary_auprc
 from chiaroscuro.utils import encode_labels, load_model
 
 # ---------------------------------------------------------------------------

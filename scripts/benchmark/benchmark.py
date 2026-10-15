@@ -19,10 +19,10 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_curve,
 )
-from torcheval.metrics.functional import binary_auprc, binary_auroc
 
 # sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "src"))
 from chiaroscuro.data_transforms import normalization, standardization
+from chiaroscuro.metrics import binary_auprc, binary_auroc
 from chiaroscuro.predict import predict_genome
 from chiaroscuro.utils import encode_labels, load_model
 
