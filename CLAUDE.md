@@ -9,23 +9,19 @@ TROGDOR is a deep learning method for identifying transcription initiation regio
 ## Installation
 
 ```bash
-pip install trogdor
+uv tool install trogdor
 ```
 
-For development (editable install from source):
+For development from source, see `CONTRIBUTING.md`.
 
-```bash
-pip install -e .
-```
-
-The package installs four CLI aliases that all invoke the same entry point: `TROGDOR`, `trogdor`, `dREG`, `dreg`.
+The package installs two CLI aliases that invoke the same entry point: `TROGDOR`, `trogdor`.
 
 ## CLI Pipeline
 
-The tool operates in three subcommands:
+The tool operates in four subcommands:
 
-1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of BH-adjusted probabilities
-2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig using a score threshold derived from a BH FDR threshold
+1. **score** (alias: **thatch**) – Score the whole genome using the pre-trained model; outputs a bigWig of raw sigmoid probabilities (no multiple-testing correction is applied)
+2. **peaks** (alias: **consummate_vs**) – Call peaks from the scored bigWig by thresholding probabilities at `--min_score` and merging passing bins (`--mode simple`, the default; `--mode refined` adds `max_gap`/`min_width`/summit columns)
 3. **pipeline** (alias: **burninate**) – Run both steps in sequence given an output filename prefix
 4. **fdr** (alias: **fdr_bw**) – Estimate empirical FDR for candidate peaks from a probability bigWig; shuffles the peak set to build a null distribution and reports the score threshold at a target FDR
 
@@ -75,7 +71,7 @@ Diagnostic and evaluation scripts live in `scripts/benchmark/`:
 - `cli/main.py` – CLI entry point (`cli()` function); parses args and dispatches to subcommands
 - `cli/commands.py` – Subcommand implementations: `cmd_score`, `cmd_peaks`, `cmd_pipeline`
 - `src/chiaroscuro/bigwig.py` – figwig-backed bigWig I/O helpers: `open_bigwig()`, `chrom_sizes()`, `read_values()` (per-base reads, split into windows for multithreaded decompression), `read_runs()`/`split_runs()`/`infer_bin_size()` (figwig has no `records()`; these rebuild a score bigWig's fixed-width bins, since equal-valued neighbouring bins read back as one run), `write_intervals()`
-- `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `bh_correct()`, `merge_intervals()`, `encode_labels()`
+- `src/chiaroscuro/utils.py` – Shared utilities: `load_model()`, `merge_intervals()`, `encode_labels()`
 - `src/chiaroscuro/trogdor.py` – Core model (`TROGDOR` class) and training loop
 - `src/chiaroscuro/data_transforms.py` – `normalization()`, `standardization()` (deprecated)
 - `src/chiaroscuro/modules.py` – `DoubleConv1D`, `EncoderBlock`, `DecoderBlock`, `Conv1DBlock`
@@ -108,16 +104,15 @@ Raw coverage is squashed per-strand to (0, 1) using a logistic function (`normal
 
 ## Development
 
-All Python commands, import checks, and CLI invocations must be run inside the
-`torch` conda environment:
+Development is managed with uv only (no pip/conda). Set up once with
+`uv sync --group dev`, then run all Python commands, import checks, tests, and
+CLI invocations through `uv run`:
 
 ```bash
-conda run -n torch <command>
+uv run python -c "from chiaroscuro.bigwig import read_values; print('OK')"
+uv run trogdor score --help
+uv run pytest -m "not integration"
 ```
 
-Examples:
-
-```bash
-conda run -n torch python -c "from chiaroscuro.utils import bh_correct; print('OK')"
-conda run -n torch trogdor score --help
-```
+Add dependencies with `uv add` (`uv add --group dev` for dev-only) and commit
+`uv.lock` alongside `pyproject.toml`. See `CONTRIBUTING.md`.
