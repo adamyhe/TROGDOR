@@ -12,10 +12,11 @@ import warnings
 
 
 import numpy as np
-import pybigtools
 import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import trange
+
+from .bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 
 
 class _ChunkDataset(Dataset):
@@ -249,14 +250,14 @@ def predict_chromosome(
 
 
 def _read_chrom(pl_bw, mn_bw, chrom, chrom_len):
-    """Read one chromosome from open pybigtools handles into a signal tensor.
+    """Read one chromosome from open bigWig readers into a signal tensor.
 
     Parameters
     ----------
-    pl_bw : pybigtools.BBIRead
-        Open plus-strand bigWig handle.
-    mn_bw : pybigtools.BBIRead
-        Open minus-strand bigWig handle.
+    pl_bw : figwig.BigWigReader
+        Open plus-strand bigWig reader.
+    mn_bw : figwig.BigWigReader
+        Open minus-strand bigWig reader.
     chrom : str
         Chromosome name to query.
     chrom_len : int
@@ -268,8 +269,8 @@ def _read_chrom(pl_bw, mn_bw, chrom, chrom_len):
         Stacked plus- and minus-strand coverage; NaNs replaced with 0,
         minus-strand values made non-negative.
     """
-    pl_vals = np.nan_to_num(np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32))
-    mn_vals = np.abs(np.nan_to_num(np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)))
+    pl_vals = np.nan_to_num(read_values(pl_bw, chrom, 0, chrom_len))
+    mn_vals = np.abs(np.nan_to_num(read_values(mn_bw, chrom, 0, chrom_len)))
     return torch.tensor(np.stack([pl_vals, mn_vals]))
 
 
@@ -300,8 +301,8 @@ def _prefetch_worker(pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_si
     q : queue.Queue
         Thread-safe queue shared with the consumer (main thread).
     """
-    pl_bw = pybigtools.open(pl_bigwig)
-    mn_bw = pybigtools.open(mn_bigwig)
+    pl_bw = open_bigwig(pl_bigwig)
+    mn_bw = open_bigwig(mn_bigwig)
     try:
         for chrom in chroms_to_load:
             chrom_len = chrom_sizes[chrom]
@@ -310,8 +311,6 @@ def _prefetch_worker(pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_si
     except Exception as exc:
         q.put(exc)
     finally:
-        pl_bw.close()
-        mn_bw.close()
         q.put(None)  # sentinel
 
 
@@ -375,9 +374,7 @@ def predict_genome(
     probs : np.ndarray, shape=(chrom_len // output_stride,), dtype=float32
     """
     # Read chrom sizes from plus-strand bigWig to filter chromosomes up front
-    _pl_bw = pybigtools.open(pl_bigwig)
-    chrom_sizes = dict(_pl_bw.chroms())
-    _pl_bw.close()
+    chrom_sizes = bw_chrom_sizes(open_bigwig(pl_bigwig))
 
     chroms_to_score = chroms if chroms is not None else list(chrom_sizes.keys())
 

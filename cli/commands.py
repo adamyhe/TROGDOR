@@ -12,11 +12,19 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import pybigtools
 import torch
 import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
+from chiaroscuro.bigwig import (
+    chrom_sizes as bw_chrom_sizes,
+    infer_bin_size,
+    open_bigwig,
+    read_runs,
+    read_values,
+    split_runs,
+    write_intervals,
+)
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.peaks import call_peaks
 from chiaroscuro.predict import predict_genome
@@ -96,13 +104,8 @@ def cmd_score(args):
 
     model = load_model(model_path, device)
 
-    pl_bw = pybigtools.open(args.pl_bigwig)
-    pl_chrom_sizes = dict(pl_bw.chroms())
-    pl_bw.close()
-
-    mn_bw = pybigtools.open(args.mn_bigwig)
-    mn_chroms = set(mn_bw.chroms().keys())
-    mn_bw.close()
+    pl_chrom_sizes = bw_chrom_sizes(open_bigwig(args.pl_bigwig))
+    mn_chroms = set(bw_chrom_sizes(open_bigwig(args.mn_bigwig)))
 
     chrom_sizes = {c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms}
 
@@ -110,8 +113,8 @@ def cmd_score(args):
         args.chroms if args.chroms is not None else list(chrom_sizes.keys())
     )
 
-    # Pass 1: score the genome and collect all bins with score >= min_score
-    all_intervals = []  # list of (chrom, start, end, prob)
+    # Score the genome and collect all bins with score >= min_score
+    chrom_intervals = {}  # chrom -> (starts, ends, probs)
     chrom_dict = {}
     for chrom, chrom_len, probs in predict_genome(
         model,
@@ -128,30 +131,21 @@ def cmd_score(args):
         num_workers=getattr(args, "num_workers", 0),
     ):
         chrom_dict[chrom] = chrom_len
-        bin_indices = np.where(probs >= args.min_score)[0]
-        for i in bin_indices:
-            all_intervals.append(
-                (
-                    chrom,
-                    int(i * args.output_stride),
-                    int((i + 1) * args.output_stride),
-                    float(probs[i]),
-                )
-            )
+        bin_indices = np.flatnonzero(probs >= args.min_score)
+        chrom_intervals[chrom] = (
+            bin_indices * args.output_stride,
+            (bin_indices + 1) * args.output_stride,
+            probs[bin_indices],
+        )
 
-    m = len(all_intervals)
+    m = sum(len(starts) for starts, _, _ in chrom_intervals.values())
 
     if args.verbose:
         print(
             f"Writing {m} candidate bins (score >= {args.min_score}) to {args.output}."
         )
 
-    def _raw_intervals():
-        for chrom, start, end, prob in all_intervals:
-            yield chrom, start, end, prob
-
-    out_bw = pybigtools.open(args.output, "w")
-    out_bw.write(chrom_dict, _raw_intervals())
+    write_intervals(args.output, chrom_dict, chrom_intervals)
 
 
 def cmd_peaks(args):
@@ -179,22 +173,25 @@ def cmd_peaks(args):
         ``verbose`` (bool)
             Whether to print progress messages.
     """
-    in_bw = pybigtools.open(args.input)
-    chrom_sizes = dict(in_bw.chroms())
+    in_bw = open_bigwig(args.input)
+    chrom_sizes = bw_chrom_sizes(in_bw)
 
-    chrom_intervals = {}
-    for chrom, chrom_len in tqdm.tqdm(
-        chrom_sizes.items(),
-        desc="Loading scores",
-        disable=not args.verbose,
-    ):
-        ivals = [
-            (s, e, v)
-            for s, e, v in in_bw.records(chrom, 0, chrom_len)
-            if not np.isnan(v)
-        ]
-        chrom_intervals[chrom] = ivals
-    in_bw.close()
+    chrom_runs = {
+        chrom: read_runs(in_bw, chrom, chrom_len)
+        for chrom, chrom_len in tqdm.tqdm(
+            chrom_sizes.items(),
+            desc="Loading scores",
+            disable=not args.verbose,
+        )
+    }
+    # Equal-valued neighbouring bins read back as one run; split them back
+    # into the score bigWig's fixed-width bins, whose width every run
+    # boundary is a multiple of.
+    bin_size = infer_bin_size(chrom_runs.values())
+    chrom_intervals = {
+        chrom: split_runs(*runs, bin_size) if bin_size else []
+        for chrom, runs in chrom_runs.items()
+    }
 
     threshold = args.min_score
     mode = getattr(args, "mode", "simple")
@@ -220,16 +217,14 @@ def cmd_peaks(args):
 
     support_handles = None
     if min_support_signal > 0:
-        support_handles = (pybigtools.open(support_plus), pybigtools.open(support_minus))
+        support_handles = (open_bigwig(support_plus), open_bigwig(support_minus))
 
     def _has_support(chrom, start, end):
         if support_handles is None:
             return True
         pl_bw, mn_bw = support_handles
-        pl = np.nan_to_num(np.array(pl_bw.values(chrom, start, end), dtype=np.float32))
-        mn = np.abs(
-            np.nan_to_num(np.array(mn_bw.values(chrom, start, end), dtype=np.float32))
-        )
+        pl = np.nan_to_num(read_values(pl_bw, chrom, start, end))
+        mn = np.abs(np.nan_to_num(read_values(mn_bw, chrom, start, end)))
         return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
 
     if args.verbose:
@@ -290,10 +285,6 @@ def cmd_peaks(args):
 
     if args.verbose:
         print(f"{n_peaks} peaks written to {out_path}")
-
-    if support_handles is not None:
-        support_handles[0].close()
-        support_handles[1].close()
 
 
 def cmd_pipeline(args):
@@ -399,8 +390,8 @@ def cmd_fdr(args):
         ``verbose`` (bool)
             Whether to print per-chromosome progress.
     """
-    bw = pybigtools.open(args.bigwig)
-    chrom_sizes = dict(bw.chroms())
+    bw = open_bigwig(args.bigwig)
+    chrom_sizes = bw_chrom_sizes(bw)
     chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
 
     peaks_df = pd.read_csv(
@@ -439,7 +430,6 @@ def cmd_fdr(args):
             bw, null_df, chrom_sizes, args.stat, chroms, verbose=args.verbose
         )
         null_score_lists.append(s[~np.isnan(s)])
-    bw.close()
 
     null_scores = np.concatenate(null_score_lists)
     thresholds, n_real, n_null, fdr = compute_fdr(

@@ -9,17 +9,46 @@ description = "Transcription Run-On Grants Detection Of Regulatory elements (TRO
 authors = [{ name = "Adam He", email = "adamyhe@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-urls = { homepage = "https://github.com/adamyhe/trogdor" }
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
+keywords = [
+    "bioinformatics",
+    "deep-learning",
+    "genomics",
+    "gro-seq",
+    "pro-seq",
+    "peak calling",
+    "transcription",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "torch",
     "torcheval",
-    "pybigtools",
+    "figwig>=0.1",
     "numpy",
     "pandas",
     "tqdm",
     "huggingface_hub",
 ]
+
+[project.urls]
+Homepage = "https://github.com/adamyhe/TROGDOR"
+Repository = "https://github.com/adamyhe/TROGDOR"
+Issues = "https://github.com/adamyhe/TROGDOR/issues"
+Weights = "https://huggingface.co/adamyhe/TROGDOR"
 
 [project.scripts]
 TROGDOR = "cli.main:cli"

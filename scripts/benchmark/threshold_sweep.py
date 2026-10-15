@@ -54,8 +54,14 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pybigtools
-
+from chiaroscuro.bigwig import (
+    chrom_sizes as bw_chrom_sizes,
+    infer_bin_size,
+    open_bigwig,
+    read_runs,
+    read_values,
+    split_runs,
+)
 from chiaroscuro.peaks import call_peaks
 
 
@@ -212,8 +218,10 @@ def read_bigwig_intervals(bw_path, chroms, verbose):
     Only intervals explicitly stored in the bigWig are returned; the caller is
     responsible for filtering by threshold.
     """
-    bw = pybigtools.open(bw_path)
-    chrom_sizes = dict(bw.chroms())
+    bw = open_bigwig(bw_path)
+    chrom_sizes = bw_chrom_sizes(bw)
+    runs = {c: read_runs(bw, c, chrom_sizes[c]) for c in chroms if c in chrom_sizes}
+    bin_size = infer_bin_size(runs.values())
     scored = {}
 
     for chrom in chroms:
@@ -224,15 +232,9 @@ def read_bigwig_intervals(bw_path, chroms, verbose):
         chrom_len = chrom_sizes[chrom]
         if verbose:
             print(f"  Reading {chrom} ({chrom_len:,} bp)...", flush=True)
-        ivals = [
-            (int(s), int(e), float(v))
-            for s, e, v in bw.records(chrom, 0, chrom_len)
-            if not (v != v)  # drop NaN
-        ]
+        ivals = split_runs(*runs[chrom], bin_size) if bin_size else []
         if ivals:
-            scored[chrom] = sorted(ivals)  # sorted by start (already is, but be safe)
-
-    bw.close()
+            scored[chrom] = ivals
     return chrom_sizes, scored
 
 
@@ -389,10 +391,8 @@ def _support_mask(chrom, peak_starts, peak_ends, support_handles, min_support_si
     pl_bw, mn_bw = support_handles
     keep = np.zeros(len(peak_starts), dtype=bool)
     for i, (start, end) in enumerate(zip(peak_starts, peak_ends)):
-        pl = np.nan_to_num(np.array(pl_bw.values(chrom, int(start), int(end)), dtype=np.float32))
-        mn = np.abs(
-            np.nan_to_num(np.array(mn_bw.values(chrom, int(start), int(end)), dtype=np.float32))
-        )
+        pl = np.nan_to_num(read_values(pl_bw, chrom, int(start), int(end)))
+        mn = np.abs(np.nan_to_num(read_values(mn_bw, chrom, int(start), int(end))))
         keep[i] = max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
     return keep
 
@@ -432,9 +432,7 @@ def main():
 
     # ---- Determine chromosome list and load scored intervals ---------------
     if args.bigwig:
-        bw = pybigtools.open(args.bigwig)
-        all_chroms = sorted(bw.chroms().keys())
-        bw.close()
+        all_chroms = sorted(bw_chrom_sizes(open_bigwig(args.bigwig)))
         chroms = args.chroms if args.chroms is not None else all_chroms
         chroms = [c for c in chroms if c in truth_chroms]
         if not chroms:
@@ -484,8 +482,8 @@ def main():
     support_handles = None
     if args.min_support_signal > 0:
         support_handles = (
-            pybigtools.open(args.support_plus_bigwig),
-            pybigtools.open(args.support_minus_bigwig),
+            open_bigwig(args.support_plus_bigwig),
+            open_bigwig(args.support_minus_bigwig),
         )
 
     # ---- Pre-process: convert interval lists to sorted numpy arrays --------
@@ -699,10 +697,6 @@ def main():
         fig.savefig(args.figure, dpi=150)
         if args.verbose:
             print(f"Figure saved to {args.figure}")
-
-    if support_handles is not None:
-        support_handles[0].close()
-        support_handles[1].close()
 
 
 if __name__ == "__main__":

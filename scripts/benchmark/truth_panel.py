@@ -19,10 +19,10 @@ import argparse
 
 import numpy as np
 import pandas as pd
-import pybigtools
 from torcheval.metrics.functional import binary_auprc, binary_auroc
 import torch
 
+from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 from chiaroscuro.utils import encode_labels
 
 
@@ -189,20 +189,19 @@ def _overlaps_any(query_df, subject_df, chrom, window=0):
 
 
 def _load_scores(prob_bw, truth_df, chrom_sizes, chroms, output_stride):
-    bw = pybigtools.open(prob_bw)
+    bw = open_bigwig(prob_bw)
     probs_all = []
     labels_all = []
     for chrom in chroms:
-        if chrom not in bw.chroms() or chrom not in chrom_sizes:
+        if chrom not in bw_chrom_sizes(bw) or chrom not in chrom_sizes:
             continue
         chrom_len = chrom_sizes[chrom]
-        raw = np.nan_to_num(np.array(bw.values(chrom, 0, chrom_len), dtype=np.float32))
+        raw = np.nan_to_num(read_values(bw, chrom, 0, chrom_len))
         n_bins = chrom_len // output_stride
         if len(raw) < n_bins:
             continue
         probs_all.append(raw[:n_bins])
         labels_all.append(encode_labels(truth_df, chrom, chrom_len, output_stride))
-    bw.close()
     if not probs_all:
         return None, None
     return np.concatenate(probs_all), np.concatenate(labels_all)

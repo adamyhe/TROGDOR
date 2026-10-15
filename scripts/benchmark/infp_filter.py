@@ -32,7 +32,14 @@ import argparse
 import sys
 
 import numpy as np
-import pybigtools
+from chiaroscuro.bigwig import (
+    chrom_sizes as bw_chrom_sizes,
+    open_bigwig,
+    read_runs,
+    read_values,
+    split_runs,
+    write_intervals,
+)
 
 
 def parse_args():
@@ -159,10 +166,10 @@ def _mask_to_intervals(mask):
 def main():
     args = parse_args()
 
-    pl_bw = pybigtools.open(args.plus)
-    mn_bw = pybigtools.open(args.minus)
-    pl_sizes = dict(pl_bw.chroms())
-    mn_sizes = dict(mn_bw.chroms())
+    pl_bw = open_bigwig(args.plus)
+    mn_bw = open_bigwig(args.minus)
+    pl_sizes = bw_chrom_sizes(pl_bw)
+    mn_sizes = bw_chrom_sizes(mn_bw)
     chrom_sizes = {c: s for c, s in pl_sizes.items() if c in mn_sizes}
 
     chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
@@ -172,13 +179,13 @@ def main():
         print("No chromosomes to process.", file=sys.stderr)
         sys.exit(1)
 
-    in_bw = pybigtools.open(args.input_bw) if args.input_bw else None
+    in_bw = open_bigwig(args.input_bw) if args.input_bw else None
 
     bed_out = None
     if args.output_bed:
         bed_out = open(args.output_bed, "w")
 
-    all_intervals = []   # (chrom, start, end, value) for masked bigWig
+    masked_intervals = {}   # chrom -> (starts, ends, values) for masked bigWig
     total_bp = 0
     total_informative = 0
     total_bins_in = 0
@@ -190,10 +197,10 @@ def main():
             print(f"  {chrom} ({chrom_len:,} bp)...", flush=True)
 
         plus_arr = np.abs(np.nan_to_num(
-            np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+            read_values(pl_bw, chrom, 0, chrom_len)
         ))
         minus_arr = np.abs(np.nan_to_num(
-            np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+            read_values(mn_bw, chrom, 0, chrom_len)
         ))
 
         # Downsample to bin resolution before rolling sums (~output_stride× faster)
@@ -222,21 +229,15 @@ def main():
         total_informative += int(bin_inf_mask.sum()) * args.output_stride
 
         if args.output_bw and in_bw is not None:
-            recs = list(in_bw.records(chrom, 0, chrom_len))
+            recs = split_runs(*read_runs(in_bw, chrom, chrom_len), args.output_stride)
             if recs:
                 r_starts = np.array([r[0] for r in recs], dtype=np.int64)
                 r_ends   = np.array([r[1] for r in recs], dtype=np.int64)
                 r_vals   = np.array([r[2] for r in recs], dtype=np.float32)
-                finite = ~np.isnan(r_vals)
-                bin_idx = (r_starts[finite] // args.output_stride).clip(0, n_bins - 1)
+                bin_idx = (r_starts // args.output_stride).clip(0, n_bins - 1)
                 keep = bin_inf_mask[bin_idx]
-                for s, e, v in zip(
-                    r_starts[finite][keep].tolist(),
-                    r_ends[finite][keep].tolist(),
-                    r_vals[finite][keep].tolist(),
-                ):
-                    all_intervals.append((chrom, s, e, v))
-                total_bins_in  += int(finite.sum())
+                masked_intervals[chrom] = (r_starts[keep], r_ends[keep], r_vals[keep])
+                total_bins_in  += len(recs)
                 total_bins_out += int(keep.sum())
 
         if bed_out is not None:
@@ -246,10 +247,6 @@ def main():
                     f"{chrom}\t{bin_start * args.output_stride}\t{bin_end * args.output_stride}\n"
                 )
 
-    pl_bw.close()
-    mn_bw.close()
-    if in_bw is not None:
-        in_bw.close()
     if bed_out is not None:
         bed_out.close()
 
@@ -269,10 +266,8 @@ def main():
             f"Prob.bw bins: {total_bins_in:,} in → {total_bins_out:,} kept, "
             f"{bins_dropped:,} dropped ({pct_kept:.1f}% retained)"
         )
-        out_bw = pybigtools.open(args.output_bw, "w")
-        out_bw.write(
-            {c: chrom_sizes[c] for c in chroms},
-            iter(all_intervals),
+        write_intervals(
+            args.output_bw, {c: chrom_sizes[c] for c in chroms}, masked_intervals
         )
         print(f"Wrote masked bigWig to {args.output_bw}")
 

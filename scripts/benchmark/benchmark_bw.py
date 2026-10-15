@@ -23,10 +23,10 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc, binary_auroc
 
+from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 from chiaroscuro.utils import encode_labels
 
 
@@ -67,8 +67,8 @@ def bin_probs(raw, output_stride):
 def main():
     args = parse_args()
 
-    prob_bw = pybigtools.open(args.bigwig)
-    chrom_sizes = prob_bw.chroms()
+    prob_bw = open_bigwig(args.bigwig)
+    chrom_sizes = bw_chrom_sizes(prob_bw)
     chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
 
     peaks_df = pd.read_csv(
@@ -94,7 +94,7 @@ def main():
             print(f"  Reading {chrom} ({chrom_len:,} bp)...", flush=True)
 
         raw = np.nan_to_num(
-            np.array(prob_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+            read_values(prob_bw, chrom, 0, chrom_len)
         )
 
         probs = bin_probs(raw, args.output_stride)

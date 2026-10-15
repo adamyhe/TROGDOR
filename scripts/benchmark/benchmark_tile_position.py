@@ -15,10 +15,10 @@ import sys
 
 import numpy as np
 import pandas as pd
-import pybigtools
 import torch
 from torcheval.metrics.functional import binary_auprc
 
+from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.utils import encode_labels, load_model
 
@@ -241,11 +241,11 @@ def main():
     labels_all = []
     intr_labels_all = []
 
-    pl_bw = pybigtools.open(args.pl_bigwig)
-    mn_bw = pybigtools.open(args.mn_bigwig)
+    pl_bw = open_bigwig(args.pl_bigwig)
+    mn_bw = open_bigwig(args.mn_bigwig)
 
     try:
-        chrom_sizes = dict(pl_bw.chroms())
+        chrom_sizes = bw_chrom_sizes(pl_bw)
         chroms_to_score = (
             args.chroms if args.chroms is not None else list(chrom_sizes.keys())
         )
@@ -270,11 +270,11 @@ def main():
                     print(f"Processing {chrom} ({chrom_len:,} bp) ...", file=sys.stderr)
 
                 pl_vals = np.nan_to_num(
-                    np.array(pl_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+                    read_values(pl_bw, chrom, 0, chrom_len)
                 )
                 mn_vals = np.abs(
                     np.nan_to_num(
-                        np.array(mn_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+                        read_values(mn_bw, chrom, 0, chrom_len)
                     )
                 )
                 signal = torch.tensor(np.stack([pl_vals, mn_vals]))
@@ -335,8 +335,6 @@ def main():
                     intr_labels_all.append(labels[glob_start:glob_end])
 
     finally:
-        pl_bw.close()
-        mn_bw.close()
 
     if not labels_all:
         print(

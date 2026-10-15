@@ -29,9 +29,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pybigtools
 import scipy.special
 import scipy.stats
+
+from chiaroscuro.bigwig import chrom_sizes as bw_chrom_sizes, open_bigwig, read_values
 
 
 def parse_args():
@@ -84,8 +85,8 @@ def bin_probs(raw, output_stride):
 def main():
     args = parse_args()
 
-    prob_bw = pybigtools.open(args.bigwig)
-    chrom_sizes = prob_bw.chroms()
+    prob_bw = open_bigwig(args.bigwig)
+    chrom_sizes = bw_chrom_sizes(prob_bw)
     chroms = args.chroms if args.chroms is not None else sorted(chrom_sizes.keys())
 
     all_probs = []
@@ -101,7 +102,7 @@ def main():
             print(f"  Reading {chrom} ({chrom_len:,} bp)...", flush=True)
 
         raw = np.nan_to_num(
-            np.array(prob_bw.values(chrom, 0, chrom_len), dtype=np.float32)
+            read_values(prob_bw, chrom, 0, chrom_len)
         )
         all_probs.append(bin_probs(raw, args.output_stride))
 

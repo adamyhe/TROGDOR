@@ -3,7 +3,7 @@ Tests for dataset.py — NascentDataset_ (npz-backed) and NascentDataset (bigwig
 """
 
 import numpy as np
-import pybigtools
+import figwig
 import pytest
 import torch
 
@@ -147,11 +147,8 @@ class TestNascentDataset:
         pl_path = tmp_path / "pl.bw"
         mn_path = tmp_path / "mn.bw"
 
-        bw = pybigtools.open(str(pl_path), "w")
-        bw.write({"chr1": 1024}, [("chr1", 0, 1024, 5.0)])
-
-        bw = pybigtools.open(str(mn_path), "w")
-        bw.write({"chr1": 1024}, [("chr1", 0, 1024, 3.0)])
+        figwig.write_bigwig(str(pl_path), {"chr1": 1024}, "chr1", [0], [5.0], ends=[1024])
+        figwig.write_bigwig(str(mn_path), {"chr1": 1024}, "chr1", [0], [3.0], ends=[1024])
 
         return str(pl_path), str(mn_path)
 
