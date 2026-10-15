@@ -1,19 +1,6 @@
 """Tests for TROGDOR peak-calling helpers."""
 
-import sys
-import types
-
 import pytest
-
-sys.modules.setdefault("pybigtools", types.ModuleType("pybigtools"))
-torcheval = types.ModuleType("torcheval")
-torcheval_metrics = types.ModuleType("torcheval.metrics")
-torcheval_functional = types.ModuleType("torcheval.metrics.functional")
-torcheval_functional.binary_auprc = lambda *args, **kwargs: None
-torcheval_functional.binary_auroc = lambda *args, **kwargs: None
-sys.modules.setdefault("torcheval", torcheval)
-sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
-sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
 import chiaroscuro.peaks as peaks_module
 from chiaroscuro.peaks import (

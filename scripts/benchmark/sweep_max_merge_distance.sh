@@ -31,7 +31,6 @@
 #   SEED_SCORE   Held fixed across the sweep (default: 0.3, item 2b's tuned point).
 #   MIN_SCORE    Held fixed across the sweep (default: 0.95, the CLI default).
 #   DISTANCES    Space-separated max_merge_distance values, bp (default: "200 500 1000 2000").
-#   CONDA_ENV    Conda env with trogdor + compare_peaks.py's deps (default: torch).
 
 set -euo pipefail
 
@@ -43,14 +42,14 @@ OUTDIR="${OUTDIR:-./sweep_max_merge_distance}"
 SEED_SCORE="${SEED_SCORE:-0.3}"
 MIN_SCORE="${MIN_SCORE:-0.95}"
 DISTANCES="${DISTANCES:-200 500 1000 2000}"
-CONDA_ENV="${CONDA_ENV:-torch}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPARE_PEAKS="$REPO_ROOT/scripts/benchmark/compare_peaks.py"
 
 mkdir -p "$OUTDIR"
 
-run() { conda run -n "$CONDA_ENV" "$@"; }
+# Run inside the repo's uv environment (`uv sync --group dev` first).
+run() { uv run --project "$REPO_ROOT" "$@"; }
 
 # Pull the first bare decimal number following a label out of a
 # compare_peaks.py log line -- robust to exact column spacing, unlike a

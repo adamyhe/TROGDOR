@@ -29,7 +29,6 @@ from chiaroscuro.predict import predict_genome
 from chiaroscuro.stats import (
     compute_fdr,
     score_peaks,
-    select_fdr_threshold,
     shuffle_peaks,
 )
 from chiaroscuro.utils import load_model
@@ -67,13 +66,8 @@ def _load_trogdor_model(model_path, device, verbose=False):
 
 
 def _shared_chrom_sizes(pl_bigwig, mn_bigwig):
-    pl_bw = pybigtools.open(pl_bigwig)
-    pl_chrom_sizes = dict(pl_bw.chroms())
-    pl_bw.close()
-
-    mn_bw = pybigtools.open(mn_bigwig)
-    mn_chroms = set(mn_bw.chroms().keys())
-    mn_bw.close()
+    pl_chrom_sizes = bw_chrom_sizes(open_bigwig(pl_bigwig))
+    mn_chroms = set(bw_chrom_sizes(open_bigwig(mn_bigwig)))
 
     return {c: size for c, size in pl_chrom_sizes.items() if c in mn_chroms}
 
@@ -148,8 +142,8 @@ def _open_support_handles(params):
     if params["min_support_signal"] <= 0:
         return None
     return (
-        pybigtools.open(params["support_plus"]),
-        pybigtools.open(params["support_minus"]),
+        open_bigwig(params["support_plus"]),
+        open_bigwig(params["support_minus"]),
     )
 
 
@@ -157,10 +151,8 @@ def _has_support(support_handles, params, chrom, start, end):
     if support_handles is None:
         return True
     pl_bw, mn_bw = support_handles
-    pl = np.nan_to_num(np.array(pl_bw.values(chrom, start, end), dtype=np.float32))
-    mn = np.abs(
-        np.nan_to_num(np.array(mn_bw.values(chrom, start, end), dtype=np.float32))
-    )
+    pl = np.nan_to_num(read_values(pl_bw, chrom, start, end))
+    mn = np.abs(np.nan_to_num(read_values(mn_bw, chrom, start, end)))
     return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= params["min_support_signal"]
 
 
@@ -212,8 +204,7 @@ def _call_chrom_peaks(chrom, intervals, params, support_handles=None):
 def _write_peak_record(out_bed, peak, params):
     if params["mode"] == "simple":
         out_bed.write(
-            f"{peak['chrom']}\t{peak['start']}\t{peak['end']}\t"
-            f"{peak['score']:.6g}\n"
+            f"{peak['chrom']}\t{peak['start']}\t{peak['end']}\t{peak['score']:.6g}\n"
         )
     else:
         out_bed.write(
@@ -407,12 +398,7 @@ def cmd_peaks(args):
             )
         return n
 
-    try:
-        n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
-    finally:
-        if support_handles is not None:
-            support_handles[0].close()
-            support_handles[1].close()
+    n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
 
     if args.verbose:
         print(f"{n_peaks} peaks written to {out_path}")
@@ -537,22 +523,13 @@ def cmd_pipeline(args):
                 )
             return n
 
-        try:
-            n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
-        finally:
-            if support_handles is not None:
-                support_handles[0].close()
-                support_handles[1].close()
+        n_peaks, out_path = _write_peak_file(args.output, _write_peaks)
 
         if args.verbose:
             print(f"{n_peaks} peaks written to {out_path}")
 
     if args.save_bigwig is not None:
-        bw_prefix = (
-            args.save_bigwig[: -len(".prob.bw")]
-            if args.save_bigwig.endswith(".prob.bw")
-            else args.save_bigwig
-        )
+        bw_prefix = args.save_bigwig.removesuffix(".prob.bw")
         _run_with_bigwig(bw_prefix)
     else:
         _run_direct()
@@ -752,7 +729,14 @@ def cmd_fdr(args):
         ax.set_ylim(0, 1.05)
 
         ax2 = ax.twinx()
-        ax2.plot(thresholds, recall, color="steelblue", linewidth=1.5, linestyle="-", label="Recall")
+        ax2.plot(
+            thresholds,
+            recall,
+            color="steelblue",
+            linewidth=1.5,
+            linestyle="-",
+            label="Recall",
+        )
         ax2.set_ylabel("Recall (fraction of real peaks)", color="steelblue")
         ax2.tick_params(axis="y", labelcolor="steelblue")
         ax2.set_ylim(0, 1.05)

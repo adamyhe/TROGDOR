@@ -10,7 +10,6 @@ import queue
 import threading
 import warnings
 
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -219,7 +218,9 @@ def predict_chromosome(
     with torch.no_grad():
         for batch in loader:
             X_ = batch.to(dtype=dtype, device=device, non_blocking=pin)
-            with torch.autocast(device_type=device_type, dtype=dtype, enabled=autocast_enabled):
+            with torch.autocast(
+                device_type=device_type, dtype=dtype, enabled=autocast_enabled
+            ):
                 y_ = model(X_)
             all_preds.append(y_.cpu())
             bar.update()
@@ -334,7 +335,9 @@ def _select_chroms_to_score(chroms_to_score, chrom_sizes, chunk_size):
 
     if short_chroms:
         min_short_len = min(length for _, length in short_chroms)
-        chrom_list = ", ".join(f"{chrom} ({length} bp)" for chrom, length in short_chroms)
+        chrom_list = ", ".join(
+            f"{chrom} ({length} bp)" for chrom, length in short_chroms
+        )
         warnings.warn(
             f"Skipping {len(short_chroms)} chromosome(s) shorter than chunk_size "
             f"{chunk_size}: {chrom_list}. Re-run with chunk_size <= {min_short_len} "

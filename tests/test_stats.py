@@ -9,19 +9,10 @@ import importlib.util
 import numpy as np
 import pytest
 
-sys.modules.setdefault("pybigtools", types.ModuleType("pybigtools"))
 hf = types.ModuleType("huggingface_hub")
 hf.hf_hub_download = lambda *args, **kwargs: None
 hf.try_to_load_from_cache = lambda *args, **kwargs: None
 sys.modules.setdefault("huggingface_hub", hf)
-torcheval = types.ModuleType("torcheval")
-torcheval_metrics = types.ModuleType("torcheval.metrics")
-torcheval_functional = types.ModuleType("torcheval.metrics.functional")
-torcheval_functional.binary_auprc = lambda *args, **kwargs: None
-torcheval_functional.binary_auroc = lambda *args, **kwargs: None
-sys.modules.setdefault("torcheval", torcheval)
-sys.modules.setdefault("torcheval.metrics", torcheval_metrics)
-sys.modules.setdefault("torcheval.metrics.functional", torcheval_functional)
 
 from chiaroscuro.stats import compute_fdr, select_fdr_threshold
 

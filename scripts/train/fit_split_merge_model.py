@@ -57,13 +57,19 @@ import argparse
 import os
 
 import numpy as np
-import pybigtools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss, precision_recall_fscore_support
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
+from chiaroscuro.bigwig import (
+    chrom_sizes as bw_chrom_sizes,
+    infer_bin_size,
+    open_bigwig,
+    read_runs,
+    split_runs,
+)
 from chiaroscuro.peaks import (
     FEATURE_NAMES,
     _local_maxima,
@@ -359,8 +365,8 @@ def main():
     diag_blocks_ge3 = 0
 
     for bw_idx, bw_path in enumerate(args.prob_bigwigs):
-        bw = pybigtools.open(bw_path)
-        chrom_sizes = dict(bw.chroms())
+        bw = open_bigwig(bw_path)
+        chrom_sizes = bw_chrom_sizes(bw)
         chroms = args.chroms if args.chroms else sorted(chrom_sizes)
         if args.verbose:
             print(f"[{bw_idx + 1}/{len(args.prob_bigwigs)}] {bw_path}: {len(chroms)} chromosomes")
@@ -368,11 +374,9 @@ def main():
             if chrom not in chrom_sizes:
                 continue
             chrom_len = chrom_sizes[chrom]
-            intervals = [
-                (s, e, v)
-                for s, e, v in bw.records(chrom, 0, chrom_len)
-                if not np.isnan(v)
-            ]
+            runs = read_runs(bw, chrom, chrom_len)
+            bin_size = infer_bin_size([runs])
+            intervals = split_runs(*runs, bin_size) if bin_size else []
             if not intervals:
                 continue
 
@@ -406,7 +410,6 @@ def main():
 
                     features = _pairwise_features(block, smooth, left, valley_i, right)
                     rows.append((*features, label, is_val))
-        bw.close()
 
     if not rows:
         raise SystemExit("No labeled pairs generated -- check inputs/thresholds.")
