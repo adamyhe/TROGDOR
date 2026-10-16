@@ -65,7 +65,10 @@ want to keep the score track.
 | `-b / --save_bigwig` | off     | Save the intermediate probability bigWig to this path (`pipeline` only) |
 | `--chroms`           | all     | Score only specific chromosomes (e.g. `--chroms chr1 chr2`)             |
 | `--num_workers`      | `0`     | DataLoader workers for chunk preprocessing (set to 1–4 on Linux/CUDA)   |
+| `--dtype`            | `auto`  | Inference precision: `auto` (bf16 on CUDA where supported), `bf16`, `fp32` |
 | `-v / --verbose`     | off     | Print progress messages                                                 |
+
+bf16 is ~1.8x faster than fp32 on Ampere and newer GPUs, but its scores vary slightly between GPU generations (on one test chromosome, ~2.5–3% of bins near the 0.95 threshold changed side). Use `--dtype fp32` when results must be reproducible across GPUs, and generate any score tracks you plan to compare on the same class of GPU.
 
 ### Running steps separately
 

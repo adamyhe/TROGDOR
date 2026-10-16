@@ -1,6 +1,7 @@
 """Tests for the dense-track memory paths: NumPy-array input to the peak
 callers, per-chromosome filtering in ``cmd_peaks``, streamed writes in
-``cmd_score``, and the bounded chromosome prefetch in ``predict_genome``."""
+``cmd_score``, the bounded chromosome prefetch in ``predict_genome``, and
+``--dtype`` passthrough."""
 
 import argparse
 import importlib.util
@@ -250,8 +251,10 @@ def _score_args(pl, mn, output, **overrides):
     return argparse.Namespace(**args)
 
 
-def _fake_predict_genome(fail_on=None):
+def _fake_predict_genome(fail_on=None, seen=None):
     def fake(model, pl_bigwig, mn_bigwig, chroms=None, output_stride=16, **kwargs):
+        if seen is not None:
+            seen.update(kwargs)
         sizes = chrom_sizes(open_bigwig(pl_bigwig))
         for i, chrom in enumerate(chroms):
             if chrom == fail_on:
@@ -287,6 +290,42 @@ def test_cmd_score_removes_partial_output_on_failure(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         _commands.cmd_score(_score_args(pl, mn, out))
     assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [(None, "auto"), ("auto", "auto"), ("bf16", torch.bfloat16), ("fp32", torch.float32)],
+)
+def test_cmd_score_passes_dtype(tmp_path, monkeypatch, dtype, expected):
+    pl, mn = _write_coverage(tmp_path, {"chr1": 512})
+    seen = {}
+    monkeypatch.setattr(_commands, "_load_trogdor_model", lambda *a: (None, "cpu"))
+    monkeypatch.setattr(_commands, "predict_genome", _fake_predict_genome(seen=seen))
+    overrides = {} if dtype is None else {"dtype": dtype}  # None: attribute absent
+    _commands.cmd_score(_score_args(pl, mn, tmp_path / "s.bw", **overrides))
+    assert seen["dtype"] == expected
+
+
+@pytest.mark.parametrize("subcommand", ["score", "pipeline"])
+def test_dtype_cli_option(monkeypatch, subcommand):
+    import cli.main as cli_main
+
+    captured = {}
+    target = "cmd_score" if subcommand == "score" else "cmd_pipeline"
+    monkeypatch.setattr(cli_main, target, lambda args: captured.update(vars(args)))
+    base = [subcommand, "-p", "pl.bw", "-m", "mn.bw", "-o", "out"]
+
+    monkeypatch.setattr(sys, "argv", ["trogdor", *base])
+    cli_main.cli()
+    assert captured["dtype"] == "auto"
+
+    monkeypatch.setattr(sys, "argv", ["trogdor", *base, "--dtype", "fp32"])
+    cli_main.cli()
+    assert captured["dtype"] == "fp32"
+
+    monkeypatch.setattr(sys, "argv", ["trogdor", *base, "--dtype", "fp16"])
+    with pytest.raises(SystemExit):
+        cli_main.cli()
 
 
 # --- predict_genome: bounded prefetch ---------------------------------------

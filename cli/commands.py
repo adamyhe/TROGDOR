@@ -38,6 +38,10 @@ from chiaroscuro.utils import load_model
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
 
+# --dtype choices -> predict_genome's dtype. "auto" is bf16 on CUDA when
+# supported (including emulation on pre-Ampere GPUs), otherwise fp32.
+DTYPES = {"auto": "auto", "bf16": torch.bfloat16, "fp32": torch.float32}
+
 
 def _load_trogdor_model(model_path, device, verbose=False):
     if model_path is None:
@@ -258,6 +262,7 @@ def _stream_scores(args, model, device, valid_chroms, header):
             batch_size=args.batch_size,
             transform=normalization,
             device=device,
+            dtype=DTYPES[getattr(args, "dtype", "auto")],
             verbose=args.verbose,
             num_workers=getattr(args, "num_workers", 0),
         ):
@@ -313,6 +318,8 @@ def cmd_score(args):
         ``min_score`` (float)
             Storage threshold; bins with raw prob below this are omitted from
             the output bigWig.
+        ``dtype`` (str, optional)
+            ``"auto"`` (default), ``"bf16"`` or ``"fp32"``; see ``DTYPES``.
         ``verbose`` (bool)
             Whether to print progress messages.
     """
@@ -463,6 +470,7 @@ def cmd_pipeline(args):
                 min_score=score_min,
                 verbose=args.verbose,
                 num_workers=args.num_workers,
+                dtype=getattr(args, "dtype", "auto"),
             )
         )
         cmd_peaks(
@@ -518,6 +526,7 @@ def cmd_pipeline(args):
                 batch_size=args.batch_size,
                 transform=normalization,
                 device=device,
+                dtype=DTYPES[getattr(args, "dtype", "auto")],
                 verbose=args.verbose,
                 num_workers=getattr(args, "num_workers", 0),
             ):
