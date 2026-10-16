@@ -148,6 +148,15 @@ def cli():
         help="Refined peak caller only: require this minimum raw plus/minus signal within each peak (default: 0, disabled).",
     )
     parser_pipeline.add_argument(
+        "--dtype",
+        choices=["auto", "bf16", "fp32"],
+        default="auto",
+        help="Inference precision (default: auto = bf16 on CUDA where supported, "
+        "else fp32). bf16 is ~1.8x faster than fp32 on Ampere+ GPUs, but its scores "
+        "vary slightly between GPU generations; use fp32 for results that are "
+        "reproducible across GPUs.",
+    )
+    parser_pipeline.add_argument(
         "--num_workers",
         type=int,
         default=4,
@@ -243,6 +252,15 @@ def cli():
         help="Storage threshold; bins with raw prob below this are omitted from the output bigWig (default: 0.95)"
         " Should be explicitly set to 0 for use with FDR calculation tool (in which case this command will be"
         " slow and use more RAM.",
+    )
+    parser_score.add_argument(
+        "--dtype",
+        choices=["auto", "bf16", "fp32"],
+        default="auto",
+        help="Inference precision (default: auto = bf16 on CUDA where supported, "
+        "else fp32). bf16 is ~1.8x faster than fp32 on Ampere+ GPUs, but its scores "
+        "vary slightly between GPU generations; use fp32 for results that are "
+        "reproducible across GPUs.",
     )
     parser_score.add_argument(
         "--num_workers",

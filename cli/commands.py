@@ -3,6 +3,7 @@
 
 import argparse
 import io
+import math
 import os
 import shutil
 import subprocess
@@ -17,22 +18,58 @@ import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
 from chiaroscuro.bigwig import (
+    IntervalWriter,
     chrom_sizes as bw_chrom_sizes,
     infer_bin_size,
     open_bigwig,
     read_runs,
     read_values,
-    split_runs,
-    write_intervals,
+    split_runs_arrays,
 )
 from chiaroscuro.data_transforms import normalization
 from chiaroscuro.peaks import call_peaks
-from chiaroscuro.predict import predict_genome
+from chiaroscuro.predict import _select_chroms_to_score, predict_genome
 from chiaroscuro.stats import compute_fdr, score_peaks, shuffle_peaks
 from chiaroscuro.utils import load_model, merge_intervals
 
 HF_REPO_ID = "adamyhe/TROGDOR"
 HF_MODEL_FILENAME = "TROGDOR.torch"
+
+# --dtype choices -> predict_genome's dtype. "auto" is bf16 on CUDA when
+# supported (including emulation on pre-Ampere GPUs), otherwise fp32.
+DTYPES = {"auto": "auto", "bf16": torch.bfloat16, "fp32": torch.float32}
+
+
+def _stream_scores(args, model, device, valid_chroms, header):
+    """Score ``valid_chroms`` and write each to ``args.output`` as it's scored."""
+    m = 0
+    with IntervalWriter(args.output, header) as writer:
+        for chrom, _, probs in predict_genome(
+            model,
+            args.pl_bigwig,
+            args.mn_bigwig,
+            chroms=valid_chroms,
+            output_stride=args.output_stride,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            batch_size=args.batch_size,
+            transform=normalization,
+            device=device,
+            dtype=DTYPES[getattr(args, "dtype", "auto")],
+            verbose=args.verbose,
+            num_workers=getattr(args, "num_workers", 0),
+        ):
+            bin_indices = np.flatnonzero(probs >= args.min_score)
+            writer.write(
+                chrom,
+                bin_indices * args.output_stride,
+                (bin_indices + 1) * args.output_stride,
+                probs[bin_indices],
+            )
+            m += len(bin_indices)
+
+    if args.verbose:
+        print(f"Wrote {m} candidate bins (score >= {args.min_score}) to {args.output}.")
 
 
 def cmd_score(args):
@@ -74,6 +111,8 @@ def cmd_score(args):
         ``min_score`` (float)
             Storage threshold; bins with raw prob below this are omitted from
             the output bigWig.
+        ``dtype`` (str, optional)
+            ``"auto"`` (default), ``"bf16"`` or ``"fp32"``; see ``DTYPES``.
         ``verbose`` (bool)
             Whether to print progress messages.
     """
@@ -113,39 +152,21 @@ def cmd_score(args):
         args.chroms if args.chroms is not None else list(chrom_sizes.keys())
     )
 
-    # Score the genome and collect all bins with score >= min_score
-    chrom_intervals = {}  # chrom -> (starts, ends, probs)
-    chrom_dict = {}
-    for chrom, chrom_len, probs in predict_genome(
-        model,
-        args.pl_bigwig,
-        args.mn_bigwig,
-        chroms=chroms_to_score,
-        output_stride=args.output_stride,
-        chunk_size=args.chunk_size,
-        overlap=args.overlap,
-        batch_size=args.batch_size,
-        transform=normalization,
-        device=device,
-        verbose=args.verbose,
-        num_workers=getattr(args, "num_workers", 0),
-    ):
-        chrom_dict[chrom] = chrom_len
-        bin_indices = np.flatnonzero(probs >= args.min_score)
-        chrom_intervals[chrom] = (
-            bin_indices * args.output_stride,
-            (bin_indices + 1) * args.output_stride,
-            probs[bin_indices],
-        )
+    # The header lists the chromosomes that will actually be scored, in
+    # scoring order, so each one can be written as soon as it's scored rather
+    # than holding a whole genome of (dense, with -s 0) bins until the end.
+    valid_chroms = _select_chroms_to_score(
+        chroms_to_score, pl_chrom_sizes, args.chunk_size
+    )
+    header = {chrom: pl_chrom_sizes[chrom] for chrom in valid_chroms}
 
-    m = sum(len(starts) for starts, _, _ in chrom_intervals.values())
-
-    if args.verbose:
-        print(
-            f"Writing {m} candidate bins (score >= {args.min_score}) to {args.output}."
-        )
-
-    write_intervals(args.output, chrom_dict, chrom_intervals)
+    try:
+        _stream_scores(args, model, device, valid_chroms, header)
+    except BaseException:
+        # Don't leave a valid-looking bigWig with chromosomes missing.
+        if os.path.exists(args.output):
+            os.remove(args.output)
+        raise
 
 
 def cmd_peaks(args):
@@ -173,27 +194,26 @@ def cmd_peaks(args):
         ``verbose`` (bool)
             Whether to print progress messages.
     """
+    threshold = args.min_score
     in_bw = open_bigwig(args.input)
     chrom_sizes = bw_chrom_sizes(in_bw)
 
-    chrom_runs = {
-        chrom: read_runs(in_bw, chrom, chrom_len)
-        for chrom, chrom_len in tqdm.tqdm(
-            chrom_sizes.items(),
-            desc="Loading scores",
-            disable=not args.verbose,
-        )
-    }
-    # Equal-valued neighbouring bins read back as one run; split them back
-    # into the score bigWig's fixed-width bins, whose width every run
-    # boundary is a multiple of.
-    bin_size = infer_bin_size(chrom_runs.values())
-    chrom_intervals = {
-        chrom: split_runs(*runs, bin_size) if bin_size else []
-        for chrom, runs in chrom_runs.items()
-    }
+    # Both modes ignore bins below the threshold, so drop them per chromosome
+    # as it is read: a dense (`score -s 0`) track then never sits in memory
+    # whole. The bin size is still inferred from the unfiltered runs, so
+    # filtering can't change it.
+    chrom_runs = {}
+    bin_size = None
+    for chrom, chrom_len in tqdm.tqdm(
+        chrom_sizes.items(), desc="Loading scores", disable=not args.verbose
+    ):
+        starts, ends, values = read_runs(in_bw, chrom, chrom_len)
+        chrom_bin = infer_bin_size([(starts, ends, values)])
+        if chrom_bin:
+            bin_size = math.gcd(bin_size or 0, chrom_bin)
+        keep = values.astype(np.float64) >= threshold
+        chrom_runs[chrom] = (starts[keep], ends[keep], values[keep])
 
-    threshold = args.min_score
     mode = getattr(args, "mode", "simple")
     max_gap = getattr(args, "max_gap", 0)
     min_width = getattr(args, "min_width", 0)
@@ -228,11 +248,11 @@ def cmd_peaks(args):
         return max(pl.max(initial=0.0), mn.max(initial=0.0)) >= min_support_signal
 
     if args.verbose:
-        n_pass = sum(
-            1
-            for ivals in chrom_intervals.values()
-            for _, _, v in ivals
-            if v >= threshold
+        # Equal-valued neighbouring bins read back as one run; count bins.
+        n_pass = (
+            sum(int(((e - s) // bin_size).sum()) for s, e, _ in chrom_runs.values())
+            if bin_size
+            else 0
         )
         if n_pass == 0:
             print("No bins pass threshold; writing empty BED file")
@@ -242,16 +262,22 @@ def cmd_peaks(args):
     def _write_peaks(out_bed):
         n = 0
         for chrom in sorted(chrom_sizes):
+            # Split runs back into the score bigWig's fixed-width bins, whose
+            # width every run boundary is a multiple of, one chromosome at a time.
+            runs = chrom_runs.pop(chrom)
+            intervals = split_runs_arrays(*runs, bin_size) if bin_size else None
+            if intervals is None or len(intervals[0]) == 0:
+                continue
             if mode == "simple":
-                passing = [
-                    (s, e, v) for s, e, v in chrom_intervals[chrom] if v >= threshold
-                ]
+                # Every bin left already passes the threshold.
+                s, e, v = intervals
+                passing = list(zip(s.tolist(), e.tolist(), v.astype(np.float64).tolist()))
                 for start, end, max_v in merge_intervals(passing):
                     out_bed.write(f"{chrom}\t{start}\t{end}\t{max_v:.6g}\n")
                     n += 1
             elif mode == "refined":
                 for peak in call_peaks(
-                    chrom_intervals[chrom],
+                    intervals,
                     min_score=threshold,
                     max_gap=max_gap,
                     min_width=min_width,
@@ -325,6 +351,7 @@ def cmd_pipeline(args):
                 min_score=args.min_score,
                 verbose=args.verbose,
                 num_workers=args.num_workers,
+                dtype=getattr(args, "dtype", "auto"),
             )
         )
         cmd_peaks(
