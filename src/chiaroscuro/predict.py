@@ -56,44 +56,6 @@ class _ChunkDataset(Dataset):
         return chunk
 
 
-class _ChunkDataset(Dataset):
-    """Lazy Dataset of overlapping signal chunks for a single chromosome.
-
-    Slices chunks from a pre-loaded signal tensor on demand, applying an
-    optional per-chunk transform (e.g. normalization). Used by
-    ``predict_chromosome`` to feed a DataLoader without pre-materializing all
-    chunks at once.
-
-    Parameters
-    ----------
-    signal : torch.Tensor, shape=(2, total_length)
-        Full chromosome signal (plus and minus strands).
-    starts : list of int
-        Start position (in input coordinates) of each chunk.
-    chunk_size : int
-        Number of input positions per chunk.
-    transform : callable or None, optional
-        Function applied to each ``(2, chunk_size)`` chunk before it is
-        returned. Default is None.
-    """
-
-    def __init__(self, signal, starts, chunk_size, transform=None):
-        self.signal = signal
-        self.starts = starts
-        self.chunk_size = chunk_size
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.starts)
-
-    def __getitem__(self, i):
-        s = self.starts[i]
-        chunk = self.signal[:, s : s + self.chunk_size]
-        if self.transform is not None:
-            chunk = self.transform(chunk)
-        return chunk
-
-
 def predict_chromosome(
     model,
     signal,
@@ -275,7 +237,9 @@ def _read_chrom(pl_bw, mn_bw, chrom, chrom_len):
     return torch.tensor(np.stack([pl_vals, mn_vals]))
 
 
-def _prefetch_worker(pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_size, q):
+def _prefetch_worker(
+    pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_size, q, slots
+):
     """Background thread target that reads chromosomes and enqueues them.
 
     Opens its own bigWig handles (so the main thread is not blocked), reads
@@ -301,11 +265,17 @@ def _prefetch_worker(pl_bigwig, mn_bigwig, chroms_to_load, chrom_sizes, chunk_si
         directly — filtering is done before the worker is started).
     q : queue.Queue
         Thread-safe queue shared with the consumer (main thread).
+    slots : threading.Semaphore
+        Acquired *before* each chromosome is read and released by the consumer
+        once it is done with that chromosome's signal, so at most this many
+        chromosome signals are ever alive at once (a bounded queue alone would
+        still let the worker hold one more, read but blocked on ``put``).
     """
     pl_bw = open_bigwig(pl_bigwig)
     mn_bw = open_bigwig(mn_bigwig)
     try:
         for chrom in chroms_to_load:
+            slots.acquire()
             chrom_len = chrom_sizes[chrom]
             signal = _read_chrom(pl_bw, mn_bw, chrom, chrom_len)
             q.put((chrom, chrom_len, signal))
@@ -415,11 +385,14 @@ def predict_genome(
     # Prepare model once before the prefetch loop
     model = model.to(device).eval()
 
-    # Start prefetch thread (buffers up to 2 chromosomes ahead)
-    q = queue.Queue(maxsize=2)
+    # Start prefetch thread. Two slots: the chromosome being scored plus one
+    # read ahead, which is enough to hide bigWig I/O behind inference while
+    # capping memory at two per-base chromosome signals.
+    q = queue.Queue()
+    slots = threading.Semaphore(2)
     thread = threading.Thread(
         target=_prefetch_worker,
-        args=(pl_bigwig, mn_bigwig, valid_chroms, chrom_sizes, chunk_size, q),
+        args=(pl_bigwig, mn_bigwig, valid_chroms, chrom_sizes, chunk_size, q, slots),
         daemon=True,
     )
     thread.start()
@@ -446,6 +419,8 @@ def predict_genome(
                 verbose=verbose,
                 num_workers=num_workers,
             )
+            del item, signal  # free this chromosome before the worker reads another
+            slots.release()
             probs = torch.sigmoid(logits).squeeze(0).numpy()
             yield chrom, chrom_len, probs
 

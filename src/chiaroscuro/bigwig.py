@@ -98,10 +98,15 @@ def infer_bin_size(run_arrays):
     return g or None
 
 
-def split_runs(starts, ends, values, bin_size):
-    """Split runs into ``bin_size``-aligned bins, as a list of ``(s, e, v)``."""
+def split_runs_arrays(starts, ends, values, bin_size):
+    """Split runs into ``bin_size``-aligned bins, as ``(starts, ends, values)``
+    arrays -- the form the peak callers take without per-bin Python objects."""
+    starts = np.asarray(starts, dtype=np.int64)
+    ends = np.asarray(ends, dtype=np.int64)
+    values = np.asarray(values)
     if len(starts) == 0:
-        return []
+        empty = np.zeros(0, dtype=np.int64)
+        return empty, empty, values[:0]
     k_start = starts // bin_size
     k_end = -(-ends // bin_size)
     counts = k_end - k_start
@@ -110,9 +115,45 @@ def split_runs(starts, ends, values, bin_size):
     k = k_start[run_idx] + offsets
     bin_starts = np.maximum(k * bin_size, starts[run_idx])
     bin_ends = np.minimum((k + 1) * bin_size, ends[run_idx])
-    return list(
-        zip(bin_starts.tolist(), bin_ends.tolist(), values[run_idx].tolist())
-    )
+    return bin_starts, bin_ends, values[run_idx]
+
+
+def split_runs(starts, ends, values, bin_size):
+    """Split runs into ``bin_size``-aligned bins, as a list of ``(s, e, v)``."""
+    if len(starts) == 0:
+        return []
+    bin_starts, bin_ends, bin_values = split_runs_arrays(starts, ends, values, bin_size)
+    return list(zip(bin_starts.tolist(), bin_ends.tolist(), bin_values.tolist()))
+
+
+class IntervalWriter:
+    """Stream intervals to a bigWig one chromosome at a time.
+
+    Use as a context manager; call :meth:`write` once per chromosome, in the
+    order of ``chrom_sizes``, so callers never hold a whole genome's intervals
+    at once. Chromosomes never written are left empty.
+    """
+
+    def __init__(self, path, chrom_sizes):
+        self._writer = figwig.BigWigWriter(path, chrom_sizes)
+
+    def __enter__(self):
+        self._writer.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._writer.__exit__(*exc)
+
+    def write(self, chrom, starts, ends, values):
+        if len(starts) == 0:
+            return
+        self._writer.write(
+            chrom,
+            np.asarray(starts, dtype=np.int64),
+            np.asarray(values, dtype=np.float32),
+            ends=np.asarray(ends, dtype=np.int64),
+            missing=np.nan,
+        )
 
 
 def write_intervals(path, chrom_sizes, intervals):
@@ -128,17 +169,7 @@ def write_intervals(path, chrom_sizes, intervals):
         ``{chrom: (starts, ends, values)}`` of sorted, non-overlapping
         intervals. Chromosomes absent from it are written empty.
     """
-    with figwig.BigWigWriter(path, chrom_sizes) as writer:
+    with IntervalWriter(path, chrom_sizes) as writer:
         for chrom in chrom_sizes:
-            if chrom not in intervals:
-                continue
-            starts, ends, values = intervals[chrom]
-            if len(starts) == 0:
-                continue
-            writer.write(
-                chrom,
-                np.asarray(starts, dtype=np.int64),
-                np.asarray(values, dtype=np.float32),
-                ends=np.asarray(ends, dtype=np.int64),
-                missing=np.nan,
-            )
+            if chrom in intervals:
+                writer.write(chrom, *intervals[chrom])
