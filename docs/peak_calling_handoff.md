@@ -493,11 +493,15 @@ below are motivated by that finding, not by the original geometric concerns.
       probabilities occur among G7 chr1 bins ≥0.95 (fp32: 59,687). Re-running
       both checks on dense fp32 tracks changed TROGDOR's numbers by ≤0.005
       and no conclusion. The coarse grid still makes ties (ranking, FDR
-      steps). A prototype that runs only the 1x1 head in fp32 under bf16
-      autocast (G7 chr1, L40S) gives continuous scores at bf16 speed: 7.5s
-      and 58,730 distinct values among bins ≥0.95, vs bf16 8.7s / 206 and
-      fp32 14.8s / 59,684. Values still differ from fp32 because the body
-      stays bf16. Candidate small follow-up PR to main.
+      steps). **Fixed in #10:** `TROGDOR.forward` now runs the 1x1 head in
+      fp32 under bf16 autocast, giving continuous scores at bf16 speed (G7
+      chr1, L40S: 58,754 distinct values among bins ≥0.95, vs 206 before and
+      59,684 in fp32; 7.5s vs bf16 8.7s, the gap being noise, and fp32
+      14.8s). Values still differ slightly from fp32 because the body stays
+      bf16. This also applies in training (fit(bf16=True)), where logits and
+      the loss are now fp32. Score tracks under `tmp/scores/` and
+      `tmp/fp32/` predate #10; re-score all tracks together for any new
+      comparison.
 
       Implication: further peak-geometry tuning can't close this gap. It's in
       how well TROGDOR's scores generalize beyond the K562 label definition,
