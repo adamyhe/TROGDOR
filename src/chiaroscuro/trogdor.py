@@ -165,7 +165,7 @@ class TROGDOR(torch.nn.Module):
         Returns
         -------
         y : torch.Tensor, shape=(B, 1, L // output_stride)
-            Per-bin logit scores at output resolution.
+            Per-bin logit scores at output resolution, always float32.
         """
         X = self.stem(X)
 
@@ -182,7 +182,14 @@ class TROGDOR(torch.nn.Module):
         for dec, skip in zip(self.decoders, reversed(inner_skips)):
             X = dec(X, skip)
 
-        return self.head(X)
+        # Run the 1x1 head in fp32 even under bf16 autocast. A bf16 head
+        # quantizes the logits (8 mantissa bits), so probabilities fall on a
+        # coarse grid -- ~200 distinct values among bins >= 0.95 on a whole
+        # chromosome -- which creates ties in rankings, PR curves and FDR
+        # thresholds. The head is a single 1x1 conv, so this costs nothing
+        # measurable; the rest of the network still runs in bf16.
+        with torch.autocast(device_type=X.device.type, enabled=False):
+            return self.head(X.float())
 
     def _validate(
         self,
