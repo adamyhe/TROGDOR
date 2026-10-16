@@ -503,6 +503,17 @@ below are motivated by that finding, not by the original geometric concerns.
       `tmp/fp32/` predate #10; re-score all tracks together for any new
       comparison.
 
+      **GM12878 vs. primary B-cell PRO-cap (ENCSR083AMN; 2026-10-16,
+      `tmp/bcell/`).** ENCODE has no GM12878 PRO-cap, so B-cell PRO-cap
+      (bidirectional + unidirectional, lifted to hg19, 47,995 peaks) stands in
+      as point truth independent of every training label. dREG leads on every
+      metric, by more than on any other truth set: site-level AUPRC 0.428 vs
+      0.369, AUROC 0.920 vs 0.843; peak-level AUROC 0.918 vs 0.880; at default
+      calls, peak sens. 0.673 vs 0.519 and PPV 0.391 vs 0.279; width-controlled
+      (N=70k, W=200), peak sens. 0.620 vs 0.483 and PPV 0.424 vs 0.283. EBV
+      transformation means some GM12878 TSSs differ from primary B cells, but
+      that applies to both callers equally.
+
       Implication: further peak-geometry tuning can't close this gap. It's in
       how well TROGDOR's scores generalize beyond the K562 label definition,
       which points to `docs/training_improvement_plan.md` (e.g.

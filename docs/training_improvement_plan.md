@@ -1,6 +1,149 @@
 # TROGDOR Architecture & Training Improvement Plan
 
-## Status (2026-07-17)
+## Status (2026-10-16)
+
+**Active; the lead experiment has changed.** The peak-geometry work
+(`docs/peak_calling_handoff.md` item 2c-ii) found that TROGDOR's gap to dREG
+is in how its scores generalize, not in the peak caller. Like-for-like score
+comparisons and width-controlled peak comparisons put TROGDOR ahead only
+against K562.positive, the label definition it was trained on. On held-out
+GM12878 it ties, and against independent K562 PRO-cap dREG is ahead. The
+earlier PINTS-label checkpoint (item 2 below) showed the mirror image. So
+the lead experiment is now **training labels and data**, laid out in the
+next section. The older findings below stay valid but come after it.
+
+## Lead plan: PRO-cap labels on reprocessed DBNascent (2026-10-16)
+
+### Data
+
+- **Inputs:** the DBNascent reprocessing (`$SCRATCH/dbnascent-reprocess`,
+  Nextflow pipeline, validated 2026-09-30). It produces strand-split,
+  point-mode, raw-count bigWigs in **hg38** with UCSC-style `chr` contigs,
+  each with an empirically determined strand convention. As of 2026-10-16:
+  1,354 samples in the samplesheet across ~10 organisms; 2,673 bigWigs done
+  (~78 K562 files, ~8 GM12878). Keep them in `$SCRATCH` during development.
+  Copy what a published checkpoint depends on to Oak once that is settled.
+- **The whole project moves to hg38.** The shipped model reads coverage
+  only (no sequence, no coordinates), so it scores hg38 bigWigs unchanged.
+  G1-G7 and GM12878 should come from the same pipeline as everything else,
+  so preprocessing differences aren't mistaken for generalization.
+- **Labels:** ENCODE PRO-cap (224 released experiments, mostly Yu lab,
+  natively GRCh38). Pair each input with PRO-cap from the same biosample,
+  in control conditions only. Where a biosample has several PRO-cap
+  experiments, pool their reads into one consensus target per biosample,
+  but keep at least one K562 experiment out of the pool as evaluation
+  truth. ENCODE has no GM12878 PRO-cap; for GM12878, use primary **B-cell
+  PRO-cap** (ENCSR083AMN). It's the closest point-resolution truth and is
+  independent of every training label. EBV transformation means some TSSs
+  differ, so recall against it has a ceiling below 1.
+- **Supervised training set:** QC-passing human samples with a
+  matched control-condition PRO-cap biosample. Not the whole of DBNascent:
+  treated or perturbed samples (initiation changes, so control PRO-cap is
+  the wrong target), non-human samples (no ENCODE PRO-cap), and low-depth or
+  failed-QC samples are kept for evaluation (response to perturbation,
+  cross-species transfer, depth robustness). Unmatched control samples
+  could later add diversity through consistency training or pseudo-labels.
+
+### Labels: two arms, same loss family
+
+- **Hard:** 0/1 bins inside PRO-cap bidirectional + unidirectional peaks,
+  i.e. a drop-in replacement for K562.positive. This tests the label
+  *source*, but still learns one peak caller's boundary and width
+  conventions, and its depth-dependent choices about which weak TSSs are
+  positive.
+- **Soft:** per-16bp-bin PRO-cap 5′-end density from both strands, lightly
+  smoothed (±1-2 bins, to absorb small offsets between labs), scaled per
+  experiment to [0, 1] against a high quantile and clipped. Trained with the same
+  `BCEWithLogitsLoss` (fractional targets are fine), so the output stays a
+  probability and the caller, FDR tools and benchmarks are unchanged. Fix
+  the smoothing width and quantile up front, not against evaluation truth.
+  `pos_weight=500` was tuned for sparse hard labels, so give each arm a
+  small re-tune.
+- Baseline: the **shipped checkpoint as-is** on the new hg38 inputs. A
+  K562.positive retrain can't be built for multi-biosample data, since that
+  annotation exists only for K562. Optional control to separate the effect
+  of labels from the effect of more data: a K562-only PRO-cap-label run at
+  the shipped model's budget and samples.
+- If soft wins, a full profile model (strand-specific TSS density with a
+  shape and count loss, cherimoya-style) is the natural follow-up. It
+  changes what the output means, so the caller and FDR tools would need
+  rework. Defer.
+
+### Model
+
+- **One shared, input-conditioned model**, trained on pooled
+  (input, target) pairs. No per-dataset heads: TROGDOR reads a sample and
+  predicts that sample, so a new sample would have no head to use.
+- **Several output-type heads are fine:** soft density (main), hard peak
+  membership (auxiliary, which also gives the hard-vs-soft comparison in
+  one run), and optionally strand-resolved initiation, i.e. two channels,
+  for directionality.
+- **No assay/biosample conditioning at first.** It would need metadata at
+  inference and could let the model memorize dataset identity. Add it later
+  only as an ablation, if one assay clearly lags.
+- **Multiple inputs:** don't build set-pooling over replicates. Merge
+  replicate bigWigs instead, and randomly downsample/sub-select
+  replicates during training to cover a wide range of depths. **DNA sequence
+  as a second input** is a separate, later variant. It could sharpen summit
+  placement, but it makes chromosome holdouts mandatory (the model could
+  then memorize loci, which voids "Confirmed/settled" #2), and it risks
+  predicting sequence-plausible but inactive TSSs. Don't require other
+  assays (ATAC/DNase/ChIP) as inputs; needing only one nascent-RNA run is
+  TROGDOR's point.
+
+### Handling heterogeneous datasets
+
+- **Balanced sampling:** sample a biosample (uniformly or with a
+  temperature), then an input within it, then a window, so K562 and a few
+  common lines don't dominate.
+- **Normalization:** targets per experiment (above). Inputs keep the
+  current per-window logistic normalization at first, matching the shipped
+  model. With mixed depths and assays, item 9 below (per-window vs.
+  per-sample) becomes an early ablation.
+- **Pair quality:** input and PRO-cap usually come from different labs.
+  Start by filtering pairs (input depth, PRO-cap depth, agreement at
+  annotated promoters), before trying per-pair loss weights.
+- **Loader:** `NascentDataset` loads a few bigWigs whole. Hundreds need a
+  window index across samples, a per-sample sampler, and cached per-sample
+  normalization references. This is the first engineering blocker.
+
+### Splits and evaluation
+
+- Hold out **whole biosamples** (all their inputs and their PRO-cap) and at
+  least one **assay class** (ChRO-seq or mNET-seq). Group replicates and
+  same-study samples so a held-out biosample is fully held out. Never let a
+  PRO-cap experiment be both a training target and evaluation truth.
+- **Evaluation panel (hg38):**
+  - held-out PRO-cap: B-cell for GM12878, the held-out K562 experiment, and
+    held-out DBNascent/ENCODE biosample pairs. This is the generalization
+    signal that drives decisions.
+  - K562.positive and GM12878.positive, lifted to hg38 once, as standing
+    benchmarks and a regression check. A model trained on new labels should
+    hold these while improving on PRO-cap (the PINTS-label checkpoint
+    collapsed on them). They are the shipped model's and dREG's
+    training-label definition, so a win there partly means "fits that
+    definition".
+  - dREG (pydreg) on every row; it is fast enough.
+  - Peak metrics (`compare_peaks.py`, plus the width-controlled and
+    like-for-like comparisons from `peak_calling_handoff.md`) and point
+    metrics (correlation with PRO-cap density, summit distance to nearest
+    PRO-cap TSS).
+
+### Order of work
+
+1. Inventory the reprocessed samples (biosample, assay, condition, depth,
+   from sample IDs/DBNascent metadata) and pair them with ENCODE PRO-cap
+   biosamples. Confirm G1-G7 and GM12878 are in the reprocessing.
+2. Build targets: consensus soft density and hard peaks per biosample, and
+   the hg38 truth panel (liftOver K562/GM12878.positive once).
+3. Re-baseline on hg38: shipped checkpoint and pydreg on the evaluation panel.
+4. Multi-sample loader with balanced sampling and depth augmentation.
+5. Pilot: K562 plus a handful of biosamples, hard and soft heads, matched
+   against the shipped checkpoint. Then scale up.
+6. Then the older items below (residual re-run, architecture ablations),
+   which would otherwise be tuned to the old data and labels.
+
+## Status (2026-07-17, superseded)
 
 **Deferred.** This plan comes out of an architecture+training audit done
 in parallel with the peak-calling geometry work on `peak-geometry`. We are
