@@ -2,6 +2,18 @@
 
 ## Summary
 
+> **Update (2026-10-15):** the framing below — strong scores, weak caller —
+> holds only against K562.positive, TROGDOR's (and dREG's) training-label
+> definition. A like-for-like score comparison on dREG's informative
+> positions, and a width-controlled peak comparison (identical windows,
+> matched counts), show dREG ahead on held-out GM12878 and on independent
+> K562 PRO-cap truth. So the gap there is in score generalization, not peak
+> geometry. Both checks also hold on fp32 tracks. Details and tables:
+> `docs/peak_calling_handoff.md` item 2c-ii. Also, the "groHMM + DNase"
+> truth sets referred to throughout are, per the 2019 dREG paper, likely
+> DHS ∩ GRO-cap HMM calls; both callers trained on the K562 set, holding out
+> G7 and GM12878.
+
 TROGDOR appears strong as a scoring model but weaker as a peak caller. The main
 failure mode is not simply that TROGDOR assigns low scores to true initiation
 regions. Rather, TROGDOR emits highly spiky probability profiles, and the

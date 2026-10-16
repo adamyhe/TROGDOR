@@ -350,9 +350,31 @@ below are motivated by that finding, not by the original geometric concerns.
       adjacent summits are at least this many bp apart, regardless of valley
       depth or `split_merge_rule` — one interpretable knob, no proxy-label
       fitting, sweepable the same proven way `seed_score`/`boundary_fraction`
-      were (item 2b). **Not yet benchmarked** — next step is a
-      `max_merge_distance` sweep (e.g. 200/500/1000/2000bp) against
-      `compare_peaks.py` on GM12878 vs. dREG, on top of `seed_score=0.3`.
+      were (item 2b). **Benchmarked 2026-10-15 — not worth a default.**
+      `scripts/benchmark/sweep_max_merge_distance.sh` on top of
+      `seed_score=0.3`, against GM12878 groHMM+DNase plus G7 vs. both K562
+      PRO-cap and K562 groHMM+DNase:
+
+      | sample / truth | cap | n peaks | bin P | bin R | bin F1 | peak sens. | peak PPV |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | GM12878 / groHMM | none | 71,770 | 0.1985 | 0.7110 | 0.3103 | 0.7986 | 0.3465 |
+      | GM12878 / groHMM | 200 | 88,125 | 0.2090 | 0.6751 | 0.3191 | 0.7927 | 0.3219 |
+      | GM12878 / groHMM | 500 | 76,964 | 0.2076 | 0.6875 | 0.3189 | 0.7878 | 0.3358 |
+      | G7 / groHMM | none | 35,864 | 0.2471 | 0.6406 | 0.3566 | 0.6711 | 0.5228 |
+      | G7 / groHMM | 200 | 42,273 | 0.2687 | 0.6384 | 0.3782 | 0.6719 | 0.4489 |
+      | G7 / PRO-cap | none | 35,864 | 0.5178 | 0.5784 | 0.5464 | 0.5493 | 0.6680 |
+      | G7 / PRO-cap | 200 | 42,273 | 0.5370 | 0.5496 | 0.5432 | 0.5434 | 0.6725 |
+
+      1000/2000bp are effectively no-ops (within a few peaks of `none`).
+      200/500bp split more, trading recall/peak sensitivity/PPV for a little
+      bin precision — away from dREG's recall (0.852), not toward it. And
+      the confound concern was real: G7's F1 *gain* at 200bp against
+      groHMM+DNase region truth (0.357→0.378) vanishes against PRO-cap
+      (0.546→0.543), i.e. the apparent improvement was matching the region
+      truth's own merge radius. Merge distance is not the recall bottleneck;
+      keep the option, don't change defaults. (Tracks: pre-Ampere bf16 —
+      see the bf16 note under item 5; conclusions are within-track
+      comparisons so unaffected.)
     - **2c-ii, READY (promising G7 smoke test, awaiting a real G1-G6 run) —
       option A, fix the label source.** Turned out to need no new labeling
       *logic* — `_label_pair`'s existing rule (both summits in one truth
@@ -380,6 +402,108 @@ below are motivated by that finding, not by the original geometric concerns.
       set and re-check the same signals before refitting and reconsidering
       `split_merge_rule="learned"` for production.
 
+      **Full G1-G6 run done (2026-10-15; G1/G2/G3/G5/G6 — no G4 — dense
+      native-bf16 Ampere tracks): the smoke-test signals held.** 60,603
+      pairs, 56.1% excluded as ambiguous (was 96.2% with groHMM labels);
+      26,598 kept (25,723 train / 875 held-out on chr21/22; ~71% split).
+      `dist` overlaps between classes (merge 32-768bp, split 32-3840bp). The
+      distance-matched band has 23,998 pairs, held-out F1 0.89-0.90. Shape-only
+      ablation: F1 0.84 (LR) / 0.91 (tree, RF). Held-out, all features:
+
+      | Model | P | R | F1 | log-loss |
+      | --- | --- | --- | --- | --- |
+      | LogisticRegression | 0.919 | 0.886 | 0.902 | 0.277 |
+      | DecisionTree(depth=3) | 0.918 | 0.906 | 0.912 | 0.271 |
+      | RandomForest(100, depth 6) — winner | 0.917 | 0.911 | 0.914 | 0.268 |
+
+      The depth-3 tree scores the same F1 with or without `dist`/`r1`/`r2`
+      (0.9118 both), so it likely uses only valley-shape features
+      (`d2`/`d3`/`dr`) — possibly close to a re-tuned `valley_fraction`.
+      Inspect it before assuming it's new information. **Gap:** runtime
+      `_predict_split` only evaluates logistic weights; the RF export
+      (`_SPLIT_MERGE_FOREST`, ~100 trees) has no runtime evaluator. These
+      are proxy-label scores; the real test is peak-level benchmarking on
+      GM12878, not yet run. G7 vs K562 PRO-cap can't evaluate the learned
+      rule fairly (same truth file as the labels).
+
+      **TROGDOR vs. pydreg, same harness (2026-10-15, `tmp/vs_dreg/`).** At
+      `min_score=0.95` the two callers make nearly matched call counts
+      (GM12878 70,339 vs 71,448; G7 35,054 vs 35,048):
+
+      | sample / truth | caller | bin P | bin R | bin F1 | peak sens. | peak PPV | center sens. | center spec. |
+      | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+      | GM12878 / groHMM | TROGDOR | 0.2225 | 0.6701 | 0.3341 | 0.7759 | 0.3502 | 0.7223 | 0.3405 |
+      | GM12878 / groHMM | dREG | 0.1788 | 0.8516 | 0.2955 | 0.8701 | 0.4337 | 0.8501 | 0.4481 |
+      | G7 / K562 PRO-cap | TROGDOR | 0.5583 | 0.5340 | 0.5459 | 0.5246 | 0.6751 | 0.5086 | 0.6766 |
+      | G7 / K562 PRO-cap | dREG | 0.4702 | 0.7646 | 0.5823 | 0.6050 | 0.8255 | 0.5743 | 0.8410 |
+      | G7 / K562 groHMM | TROGDOR | 0.2769 | 0.6148 | 0.3818 | 0.6580 | 0.5247 | 0.6317 | 0.5050 |
+      | G7 / K562 groHMM | dREG | 0.1593 | 0.6011 | 0.2519 | 0.5981 | 0.4872 | 0.5937 | 0.4900 |
+
+      Caveats: (1) Training splits, per the 2019 dREG paper (Wang et al.,
+      Genome Res 29:293, doi:10.1101/gr.238279.118). dREG trained on five
+      K562 PRO/GRO-seq sets, with G7 (K562) and GM12878 held out. Its
+      positives are K562 transcribed DHSs, i.e. Duke ∩ UW DHSs ∩ GRO-cap HMM
+      calls. Note: the paper's positives come from *GRO-cap* HMM calls, not
+      groHMM, so "groHMM+DNase" in these docs is likely a misnomer for the
+      `*.positive.bed.gz` sets. TROGDOR follows the same split: trained on
+      `K562.positive.bed.gz` from G1/G2/G3/G5/G6, with G7 and GM12878 held out.
+      So GM12878 is a held-out cell type for *both* callers, and the
+      GM12878/positive rows are a fair head-to-head. G7/K562-positive is a
+      held-out sample scored against both callers' training-label
+      definition, which is also level. G7/K562 PRO-cap is independent of the
+      labels entirely. (2) dREG peaks are ~2x wider (median 430-450bp vs.
+      224-240bp, 1.6x total bp), which inflates ≥1bp-overlap sensitivity/PPV
+      and bin recall and deflates bin precision. On the independent truth
+      (G7/PRO-cap), dREG still leads on every metric except bin precision,
+      including the center-window ones. Next: a width-controlled comparison
+      (fixed ±W windows around TROGDOR summits and dREG centers, at matched
+      counts by rank), scored against independent truth. That settles
+      whether the gap is peak geometry or the scores themselves.
+
+      **Done — the gap is not peak geometry (2026-10-15, `tmp/width_ctrl/`,
+      `tmp/fp32/`).** Two checks:
+
+      - *Width-controlled peaks:* top-N calls by each caller's own score, with
+        identical ±100/±200bp windows around TROGDOR summits and dREG
+        centres. dREG wins every metric on GM12878 and on G7/PRO-cap at
+        every N and W, e.g. GM12878 N=70k W=200: peak sens. 0.835 vs 0.707,
+        PPV 0.476 vs 0.346; G7/PRO-cap N=35k W=200: F1 0.570 vs 0.476, PPV
+        0.852 vs 0.681. TROGDOR wins only on G7/K562.positive.
+      - *Like-for-like score separation:* both callers scored on dREG's own
+        informative positions (`*.dREG.infp.bw`), with the same labels and
+        the same shuffled-null placements:
+
+        | truth | site AUPRC TROGDOR / dREG | site AUROC | peak AUROC |
+        | --- | --- | --- | --- |
+        | G7 / K562.positive | 0.517 / 0.322 | 0.952 / 0.920 | 0.954 / 0.934 |
+        | GM12878 / positive | 0.414 / 0.396 | 0.901 / 0.931 | 0.953 / 0.966 |
+        | G7 / K562 PRO-cap | 0.681 / 0.751 | 0.916 / 0.954 | 0.915 / 0.924 |
+
+      So TROGDOR's large separation advantage is specific to K562.positive,
+      the label definition it was trained on (scored on held-out K562 sample
+      G7). On the held-out cell type it's roughly a tie, and on independent
+      PRO-cap truth dREG is ahead, though dREG trained on the same K562
+      labels. TROGDOR appears to fit its training label definition more
+      tightly but generalize less well. Caveats: sites are chosen by dREG's
+      heuristic (densified within dREG candidates); TROGDOR's summit may sit
+      on one TSS of a divergent pair, not the NFR centre.
+
+      **bf16 output quantization checked, not the cause.** Under bf16
+      autocast the 1x1 head emits bf16 logits, so only 206 distinct
+      probabilities occur among G7 chr1 bins ≥0.95 (fp32: 59,687). Re-running
+      both checks on dense fp32 tracks changed TROGDOR's numbers by ≤0.005
+      and no conclusion. The coarse grid still makes ties (ranking, FDR
+      steps). A prototype that runs only the 1x1 head in fp32 under bf16
+      autocast (G7 chr1, L40S) gives continuous scores at bf16 speed: 7.5s
+      and 58,730 distinct values among bins ≥0.95, vs bf16 8.7s / 206 and
+      fp32 14.8s / 59,684. Values still differ from fp32 because the body
+      stays bf16. Candidate small follow-up PR to main.
+
+      Implication: further peak-geometry tuning can't close this gap. It's in
+      how well TROGDOR's scores generalize beyond the K562 label definition,
+      which points to `docs/training_improvement_plan.md` (e.g.
+      label sources, cross-cell-type validation) rather than the caller.
+
 3. **Informative-site pre-filtering at candidate-seeding time — still
    demoted, likely low-value**, for the reason already established: the
    prior `scripts/benchmark/infp_filter.py` experiment (masking a dense
@@ -394,6 +518,44 @@ below are motivated by that finding, not by the original geometric concerns.
    (probability-weighted centroid alongside the summit) and
    summit-localization precision (dREG scores informative sites sparsely
    first, then densifies inside promising regions).
+
+5. **Decoy-input empirical FDR — proposed (2026-10-15), deferred until the
+   2c-i sweep and 2c-ii G1-G6 refit are done.** A third way out of item 1's
+   dead end, not on that list: both failed nulls resampled the *same score
+   track* the peaks came from. Instead, run the full `score` → `peaks`
+   pipeline on input with initiation structure destroyed, and estimate
+   `FDR(t) ≈ N_decoy_calls(t) / N_real_calls(t)` (target-decoy, as in
+   proteomics; cf. MACS's treatment/control swap). Decoy calls must clear
+   the same `min_score` through the same caller, so the item-1 tautology
+   can't arise, and the result is an FDR on TROGDOR's *own* call set — which
+   `trogdor fdr` against external truth doesn't provide.
+
+   The crux is the decoy: it must remove TIR structure while preserving the
+   coverage distribution. Strand-swapping/mirroring is too gentle (still
+   valid TIR signal; the model trains with strand-flip augmentation); a
+   genome-wide read shuffle is too harsh (reproduces the trivially-easy
+   genome null). Candidates in between: local read shuffling within
+   ~1-10kb windows (preserves local depth), or offsetting plus vs. minus
+   strand by several kb (breaks divergent pairing). The resulting FDR is
+   only "relative to that decoy", so it must be validated: decoy calls
+   should be depleted at PRO-cap TSSs, and decoy FDR should roughly agree
+   with external-truth `trogdor fdr` on K562. Plan: offline prototype in
+   `scripts/benchmark/` on G7 + GM12878 with 2 decoy types (one extra
+   scoring pass per sample per decoy); promote to a CLI flag only if it
+   agrees with the external-truth FDR.
+
+**Benchmarking note — bf16 scores depend on the GPU (2026-10-15).**
+`trogdor score` defaults to bf16 autocast (`predict.py` `dtype="auto"`,
+`torch.cuda.is_bf16_supported()`, which counts emulation, so pre-Ampere GPUs
+run emulated bf16). On G7 chr1, vs. native bf16 on an L40S: fp32 moves
+1,607/64,457 (2.5%) of `>=0.95` bins across 0.95 and changes ~15% of profile
+peak coordinates; emulated bf16 on a TITAN Xp moves 1,859 (2.9%). fp32 is
+hardware-consistent (TITAN Xp vs. L40S: max |Δp| 4e-4, 6 bins crossing).
+Speed: native bf16 is 1.8x faster than fp32 on Ampere+ (8.2 vs 14.8s), while
+emulation costs nothing on Pascal (108 vs 109s — the TITAN Xp is just ~13x
+slower). **Decision: keep bf16 as the default for the speed.** Consequence
+for benchmarks: generate every track that gets compared or fit on together
+with the same hardware class — Ampere+ (`-C "GPU_CC:8.0|GPU_CC:8.6|GPU_CC:8.9|GPU_CC:9.0"`).
 
 ## Primary References Checked
 
