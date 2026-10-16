@@ -191,6 +191,30 @@ class TestTROGDOR:
         y = m(x)
         assert y.shape == (2, 1, 256), f"Expected (2,1,256), got {y.shape}"
 
+    def test_head_is_fp32_under_bf16_autocast(self, model):
+        """Under bf16 autocast the logits are float32 and continuous, not on
+        bf16's coarse grid (the rest of the network still runs in bf16)."""
+        torch.manual_seed(0)
+        model.eval()
+        x = torch.rand(4, 2, 4096)
+        with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
+            y = model(x)
+            # The same network with its head left in bf16, for comparison.
+            body = model.stem(x)
+            for enc in model.outer_encoders:
+                _, body = enc(body)
+            skips = []
+            for enc in model.inner_encoders:
+                skip, body = enc(body)
+                skips.append(skip)
+            body = model.bottleneck(body)
+            for dec, skip in zip(model.decoders, reversed(skips)):
+                body = dec(body, skip)
+            y_bf16_head = model.head(body)
+        assert y.dtype == torch.float32
+        assert y_bf16_head.dtype == torch.bfloat16
+        assert y.unique().numel() > 4 * y_bf16_head.float().unique().numel()
+
     def test_output_stride_not_power_of_2_raises(self):
         """output_stride=6 is not a power of 2 and must raise ValueError."""
         with pytest.raises(ValueError):
